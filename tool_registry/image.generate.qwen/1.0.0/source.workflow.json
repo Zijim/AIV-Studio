@@ -1,0 +1,1288 @@
+{
+  "id": "3367b664-cc94-42c5-a39d-b84d2673e10d",
+  "revision": 0,
+  "last_node_id": 21,
+  "last_link_id": 23,
+  "nodes": [
+    {
+      "id": 16,
+      "type": "MarkdownNote",
+      "pos": [
+        -2010,
+        -1020
+      ],
+      "size": [
+        920,
+        960
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "使用说明（先看这里）",
+      "properties": {},
+      "color": "#432",
+      "bgcolor": "#653",
+      "widgets_values": [
+        "# 文生图 · Qwen-Image-2512（官方 Switch 同步版）\n\n**已按 Comfy-Org 官方模板 `image_qwen_Image_2512.json` 的 Switch 方案重构。**\n\n## 核心：一个开关，三档同步\n\n`★ 极速档开关（PrimitiveBoolean）` 同时驱动 **3 个 If/Else Switch**，\n且 Switch 的输出直接接进 KSampler 的 `steps` 与 `cfg` **输入口**：\n\n| Switch | on_false（画质档） | on_true（极速档） | 去向 |\n|---|---|---|---|\n| 模型 Switch | 基础主模型（直连） | → Lightning LoRA | → ModelSamplingAuraFlow |\n| 步数 Switch | 50 步 | 4 步 | → KSampler `steps` 输入口 |\n| CFG Switch | CFG 4.0 | CFG 1.0 | → KSampler `cfg` 输入口 |\n\n`ModelSamplingAuraFlow（shift 3.1）` 位于 LoRA 之后——无论走哪档都正好施加一次\nshift 3.1，不存在漏施加或重复叠加。\n\n> ⚠️ **shift 3.1 是硬编码的，不由开关托管。**\n> 这是刻意的：官方模板画质档与极速档用的都是 shift 3.1，两档本就相同，没必要开关。\n\n## 模型路径（与官方模板完全同构）\n\n```\nUNETLoader ──┬──> LoRA ──────┐\n             │               ▼\n             └──────────> 模型 Switch ──> ModelSamplingAuraFlow ──> KSampler\n                             (false=直连基础模型 / true=LoRA 版)\n```\n\n- `false` → Switch 取 `on_false`，即**未经 LoRA 修改**的原始主模型\n- `true`  → Switch 取 `on_true`，即 **LoRA 打过补丁**的模型\n\nLoRA 只挂在 `on_true` 这一侧，`false` 分支拿到的永远是干净的基础模型。\n\n> **关于「让 LoRA 变成可选」的尝试与结论**\n> 曾尝试把 LoRA 挂成 Switch 输出上的旁支，好让 LoRA 缺失时也能跑画质档。\n> 但实测 ComfyUI 会直接报 `dependency_cycle`（`Switch -> LoRA -> Switch`）\n> 并拒绝整个提示词——**反馈边是不被允许的**。\n> 因此这里回到官方结构：LoRA 串在 Switch 之前。\n> 唯一的实际影响是：ComfyUI 校验时会检查两个分支，**LoRA 文件必须存在**，\n> 否则整个工作流都会被拒绝。本机已下载该文件（1.58 GB），所以没问题。\n\n## 怎么切换（只碰一个地方）\n\n把 `★ 极速档开关` 的布尔值改掉即可：\n\n- `false` → **画质档**：50 步 / CFG 4.0\n- `true` → **极速档**：4 步 / CFG 1.0\n\n**不需要再 Ctrl+B 静音任何节点。** 因为 KSampler 的 `steps` / `cfg` 已被开关\n从外部接管，节点上自带的 50 / 4.0 两个数字**已失效、不会参与计算**，\n从结构上不可能出现「4 步配 CFG 4.0」这类失配。\n\n## 与旧版双路线设计的区别\n\n旧版是两条**互相独立**的路线并行存在：`shift` 写两处、`steps/cfg` 写两处，\n只能靠人工保证一致，一旦只改一边就会失配。\n现版本三个参数由同一个布尔值托管；sampler / VAEDecode / 预览 / 保存\n全程只有**一份**，也不再有「另一条路线的节点忘记静音」的问题。\n\n## 采样参数\n\n采样器 `euler` + 调度器 `simple`，denoise `1.0`，seed `72203334542782`（randomize）。\n\n## 模型三件套（都已就位）\n\n- `models/diffusion_models/qwen_image_2512_fp8_e4m3fn.safetensors`\n- `models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors`（CLIP type 选 `qwen_image`）\n- `models/vae/qwen_image_vae.safetensors`\n\n## 原生分辨率（官方比例表，别乱填）\n\n- 1:1 → 1328×1328　- 16:9 → 1664×928　- 9:16 → 928×1664\n- 4:3 → 1472×1104　- 3:4 → 1104×1472　- 3:2 → 1584×1056　- 2:3 → 1056×1584\n\n## ⚠️ LoRA 必须存在，否则整个工作流会被拒绝\n\n极速档引用的 `Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors`\n**已在本次重构中下载完成（1.58 GB）**，位于：\n\n```\nmodels/loras/Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors\n```\n\n如果以后不小心删掉了它，ComfyUI 会因为「值不在列表中」拒绝提交\n（连画质档也一起被拒），届时重新下载即可：\n\n```powershell\ncurl.exe -L -C - -o \"F:\\ComfyUI\\ComfyUI_windows_portable\\ComfyUI\\models\\loras\\Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors\" \"https://www.modelscope.cn/models/lightx2v/Qwen-Image-2512-Lightning/resolve/master/Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors\"\n```\n\n## 调参建议（按你的 4060 Ti 16GB / 32GB RAM）\n\n- 50 步 @1328² 预计 **8–15 分钟/张**（约 20GB fp8 权重靠动态显存卸载）\n- 想快又不掉太多：把「步数 Switch」的 on_false（节点 8）改成 **20–30**\n- 文字/海报类内容：保持 50 步，把 CFG Switch 的 on_false（节点 10）试到 4.5–5\n- 负面提示词用官方原文，别清空 —— CFG 4.0 时它才起作用\n- 定稿后可再走一遍 `图像高清放大.json`\n"
+      ],
+      "order": 0
+    },
+    {
+      "id": 1,
+      "type": "UNETLoader",
+      "pos": [
+        -1000,
+        -320
+      ],
+      "size": [
+        330,
+        82
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "UNet名称",
+          "name": "unet_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "unet_name"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "数据类型",
+          "name": "weight_dtype",
+          "type": "COMBO",
+          "widget": {
+            "name": "weight_dtype"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "模型",
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            1,
+            2
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "UNETLoader"
+      },
+      "widgets_values": [
+        "qwen_image_2512_fp8_e4m3fn.safetensors",
+        "default"
+      ],
+      "title": "① 主模型 Qwen-Image-2512 fp8",
+      "order": 1
+    },
+    {
+      "id": 2,
+      "type": "CLIPLoader",
+      "pos": [
+        -1000,
+        -180
+      ],
+      "size": [
+        330,
+        106
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "clip名称",
+          "name": "clip_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "clip_name"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "类型",
+          "name": "type",
+          "type": "COMBO",
+          "widget": {
+            "name": "type"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "设备",
+          "name": "device",
+          "type": "COMBO",
+          "widget": {
+            "name": "device"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "CLIP",
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            3,
+            4
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "CLIPLoader"
+      },
+      "widgets_values": [
+        "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        "qwen_image",
+        "default"
+      ],
+      "title": "② 文本编码器（type=qwen_image）",
+      "order": 2
+    },
+    {
+      "id": 3,
+      "type": "VAELoader",
+      "pos": [
+        -1000,
+        -20
+      ],
+      "size": [
+        330,
+        58
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "vae名称",
+          "name": "vae_name",
+          "type": "COMBO",
+          "widget": {
+            "name": "vae_name"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "VAE",
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            9
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "qwen_image_vae.safetensors"
+      ],
+      "title": "③ VAE",
+      "order": 3
+    },
+    {
+      "id": 6,
+      "type": "EmptySD3LatentImage",
+      "pos": [
+        -1000,
+        140
+      ],
+      "size": [
+        330,
+        106
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "宽度",
+          "name": "width",
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "高度",
+          "name": "height",
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "批量大小",
+          "name": "batch_size",
+          "type": "INT",
+          "widget": {
+            "name": "batch_size"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "Latent",
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            7
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "EmptySD3LatentImage"
+      },
+      "widgets_values": [
+        1328,
+        1328,
+        1
+      ],
+      "title": "④ 分辨率 1328x1328（1:1 原生）",
+      "order": 4
+    },
+    {
+      "id": 4,
+      "type": "CLIPTextEncode",
+      "pos": [
+        -620,
+        -320
+      ],
+      "size": [
+        440,
+        230
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "clip",
+          "name": "clip",
+          "type": "CLIP",
+          "link": 3
+        },
+        {
+          "localized_name": "文本",
+          "name": "text",
+          "type": "STRING",
+          "widget": {
+            "name": "text"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "条件",
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            5
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "CLIPTextEncode"
+      },
+      "widgets_values": [
+        [
+          "雨夜的上海街头，便利店霓虹招牌上写着「深夜食堂」四个字，湿润的路面倒映着灯光，电影感写实摄影，35mm 镜头，浅景深，高动态范围"
+        ]
+      ],
+      "title": "⑤ 正向提示词",
+      "order": 5
+    },
+    {
+      "id": 5,
+      "type": "CLIPTextEncode",
+      "pos": [
+        -620,
+        -60
+      ],
+      "size": [
+        440,
+        160
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "clip",
+          "name": "clip",
+          "type": "CLIP",
+          "link": 4
+        },
+        {
+          "localized_name": "文本",
+          "name": "text",
+          "type": "STRING",
+          "widget": {
+            "name": "text"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "条件",
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            6
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "CLIPTextEncode"
+      },
+      "widgets_values": [
+        [
+          "低分辨率，低画质，肢体畸形，手指畸形，画面过饱和，蜡像感，人脸无细节，过度光滑，画面具有AI感。构图混乱。文字模糊，扭曲"
+        ]
+      ],
+      "title": "⑥ 负向提示词（官方默认）",
+      "order": 6
+    },
+    {
+      "id": 11,
+      "type": "PrimitiveBoolean",
+      "pos": [
+        -520,
+        230
+      ],
+      "size": [
+        340,
+        58
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "值",
+          "name": "value",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "value"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "BOOLEAN",
+          "name": "BOOLEAN",
+          "type": "BOOLEAN",
+          "links": [
+            10,
+            11,
+            12
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "PrimitiveBoolean"
+      },
+      "widgets_values": [
+        false
+      ],
+      "color": "#322",
+      "bgcolor": "#533",
+      "title": "★ 极速档开关（false=画质档 / true=极速档）",
+      "order": 21
+    },
+    {
+      "id": 8,
+      "type": "PrimitiveInt",
+      "pos": [
+        -520,
+        330
+      ],
+      "size": [
+        340,
+        58
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "值",
+          "name": "value",
+          "type": "INT",
+          "widget": {
+            "name": "value"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "INT",
+          "name": "INT",
+          "type": "INT",
+          "links": [
+            15
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "PrimitiveInt"
+      },
+      "widgets_values": [
+        50,
+        "fixed"
+      ],
+      "title": "步数 on_false → 画质档 50 步",
+      "order": 8
+    },
+    {
+      "id": 9,
+      "type": "PrimitiveInt",
+      "pos": [
+        -520,
+        430
+      ],
+      "size": [
+        340,
+        58
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "值",
+          "name": "value",
+          "type": "INT",
+          "widget": {
+            "name": "value"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "INT",
+          "name": "INT",
+          "type": "INT",
+          "links": [
+            16
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "PrimitiveInt"
+      },
+      "widgets_values": [
+        4,
+        "fixed"
+      ],
+      "title": "步数 on_true → 极速档 4 步",
+      "order": 9
+    },
+    {
+      "id": 10,
+      "type": "PrimitiveFloat",
+      "pos": [
+        -520,
+        530
+      ],
+      "size": [
+        340,
+        58
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "值",
+          "name": "value",
+          "type": "FLOAT",
+          "widget": {
+            "name": "value"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "FLOAT",
+          "name": "FLOAT",
+          "type": "FLOAT",
+          "links": [
+            19
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "PrimitiveFloat"
+      },
+      "widgets_values": [
+        4
+      ],
+      "title": "CFG on_false → 画质档 CFG 4.0",
+      "order": 10
+    },
+    {
+      "id": 12,
+      "type": "PrimitiveFloat",
+      "pos": [
+        -520,
+        630
+      ],
+      "size": [
+        340,
+        58
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "值",
+          "name": "value",
+          "type": "FLOAT",
+          "widget": {
+            "name": "value"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "FLOAT",
+          "name": "FLOAT",
+          "type": "FLOAT",
+          "links": [
+            20
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "PrimitiveFloat"
+      },
+      "widgets_values": [
+        1
+      ],
+      "title": "CFG on_true → 极速档 CFG 1.0",
+      "order": 11
+    },
+    {
+      "id": 7,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+        -620,
+        60
+      ],
+      "size": [
+        450,
+        82
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "模型",
+          "name": "model",
+          "type": "MODEL",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "模型",
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            8
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+        "Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors",
+        1
+      ],
+      "title": "⑦ Lightning LoRA（只喂给 Switch 的 true 侧）",
+      "order": 12
+    },
+    {
+      "id": 13,
+      "type": "ComfySwitchNode",
+      "pos": [
+        -150,
+        240
+      ],
+      "size": [
+        370,
+        106
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "switch",
+          "name": "switch",
+          "type": "BOOLEAN",
+          "link": 10
+        },
+        {
+          "localized_name": "on_false",
+          "name": "on_false",
+          "type": "MODEL",
+          "link": 2
+        },
+        {
+          "localized_name": "on_true",
+          "name": "on_true",
+          "type": "MODEL",
+          "link": 8
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "output",
+          "name": "output",
+          "type": "MODEL",
+          "links": [
+            13
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "ComfySwitchNode"
+      },
+      "widgets_values": [],
+      "title": "模型 Switch（false=直连 / true=经 LoRA）",
+      "order": 13
+    },
+    {
+      "id": 14,
+      "type": "ComfySwitchNode",
+      "pos": [
+        -150,
+        420
+      ],
+      "size": [
+        370,
+        106
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "switch",
+          "name": "switch",
+          "type": "BOOLEAN",
+          "link": 11
+        },
+        {
+          "localized_name": "on_false",
+          "name": "on_false",
+          "type": "INT",
+          "link": 15
+        },
+        {
+          "localized_name": "on_true",
+          "name": "on_true",
+          "type": "INT",
+          "link": 16
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "output",
+          "name": "output",
+          "type": "INT",
+          "links": [
+            17
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "ComfySwitchNode"
+      },
+      "widgets_values": [],
+      "title": "步数 Switch（false=50 / true=4）→ KSampler.steps",
+      "order": 14
+    },
+    {
+      "id": 15,
+      "type": "ComfySwitchNode",
+      "pos": [
+        -150,
+        600
+      ],
+      "size": [
+        370,
+        106
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "switch",
+          "name": "switch",
+          "type": "BOOLEAN",
+          "link": 12
+        },
+        {
+          "localized_name": "on_false",
+          "name": "on_false",
+          "type": "FLOAT",
+          "link": 19
+        },
+        {
+          "localized_name": "on_true",
+          "name": "on_true",
+          "type": "FLOAT",
+          "link": 20
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "output",
+          "name": "output",
+          "type": "FLOAT",
+          "links": [
+            18
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "ComfySwitchNode"
+      },
+      "widgets_values": [],
+      "title": "CFG Switch（false=4.0 / true=1.0）→ KSampler.cfg",
+      "order": 15
+    },
+    {
+      "id": 17,
+      "type": "ModelSamplingAuraFlow",
+      "pos": [
+        300,
+        240
+      ],
+      "size": [
+        380,
+        58
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "模型",
+          "name": "model",
+          "type": "MODEL",
+          "link": 13
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "模型",
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            14
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "ModelSamplingAuraFlow"
+      },
+      "widgets_values": [
+        3.1
+      ],
+      "title": "⑧ ModelSamplingAuraFlow（shift 3.1，在 Switch 之后）",
+      "order": 16
+    },
+    {
+      "id": 18,
+      "type": "KSampler",
+      "pos": [
+        300,
+        420
+      ],
+      "size": [
+        380,
+        300
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "模型",
+          "name": "model",
+          "type": "MODEL",
+          "link": 14
+        },
+        {
+          "localized_name": "正向",
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 5
+        },
+        {
+          "localized_name": "负向",
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 6
+        },
+        {
+          "localized_name": "Latent",
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 7
+        },
+        {
+          "localized_name": "步数",
+          "name": "steps",
+          "type": "INT",
+          "link": 17
+        },
+        {
+          "localized_name": "CFG",
+          "name": "cfg",
+          "type": "FLOAT",
+          "link": 18
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "Latent",
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            21
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "KSampler"
+      },
+      "widgets_values": [
+        72203334542782,
+        "randomize",
+        50,
+        4.0,
+        "euler",
+        "simple",
+        1
+      ],
+      "title": "⑨ KSampler（steps/cfg 由 Switch 输入口接管）",
+      "order": 20
+    },
+    {
+      "id": 19,
+      "type": "VAEDecode",
+      "pos": [
+        740,
+        240
+      ],
+      "size": [
+        260,
+        46
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "样本",
+          "name": "samples",
+          "type": "LATENT",
+          "link": 21
+        },
+        {
+          "localized_name": "vae",
+          "name": "vae",
+          "type": "VAE",
+          "link": 9
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "图像",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            22,
+            23
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "VAEDecode"
+      },
+      "widgets_values": [],
+      "title": "⑩ VAEDecode（唯一，两档共用）",
+      "order": 24
+    },
+    {
+      "id": 20,
+      "type": "PreviewImage",
+      "pos": [
+        740,
+        360
+      ],
+      "size": [
+        300,
+        250
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "图像",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 22
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "images",
+          "name": "images",
+          "type": "IMAGE",
+          "links": []
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": [],
+      "title": "⑪ 预览",
+      "order": 25
+    },
+    {
+      "id": 21,
+      "type": "SaveImage",
+      "pos": [
+        740,
+        660
+      ],
+      "size": [
+        430,
+        500
+      ],
+      "flags": {},
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "图像",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 23
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "images",
+          "name": "images",
+          "type": "IMAGE",
+          "links": []
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "qwen_2512"
+      ],
+      "title": "⑫ SaveImage（两档共用）",
+      "order": 26
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      7,
+      0,
+      "MODEL"
+    ],
+    [
+      2,
+      1,
+      0,
+      13,
+      1,
+      "MODEL"
+    ],
+    [
+      3,
+      2,
+      0,
+      4,
+      0,
+      "CLIP"
+    ],
+    [
+      4,
+      2,
+      0,
+      5,
+      0,
+      "CLIP"
+    ],
+    [
+      5,
+      4,
+      0,
+      18,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      6,
+      5,
+      0,
+      18,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      7,
+      6,
+      0,
+      18,
+      3,
+      "LATENT"
+    ],
+    [
+      8,
+      7,
+      0,
+      13,
+      2,
+      "MODEL"
+    ],
+    [
+      9,
+      3,
+      0,
+      19,
+      1,
+      "VAE"
+    ],
+    [
+      10,
+      11,
+      0,
+      13,
+      0,
+      "BOOLEAN"
+    ],
+    [
+      11,
+      11,
+      0,
+      14,
+      0,
+      "BOOLEAN"
+    ],
+    [
+      12,
+      11,
+      0,
+      15,
+      0,
+      "BOOLEAN"
+    ],
+    [
+      13,
+      13,
+      0,
+      17,
+      0,
+      "MODEL"
+    ],
+    [
+      14,
+      17,
+      0,
+      18,
+      0,
+      "MODEL"
+    ],
+    [
+      15,
+      8,
+      0,
+      14,
+      1,
+      "INT"
+    ],
+    [
+      16,
+      9,
+      0,
+      14,
+      2,
+      "INT"
+    ],
+    [
+      17,
+      14,
+      0,
+      18,
+      4,
+      "INT"
+    ],
+    [
+      18,
+      15,
+      0,
+      18,
+      5,
+      "FLOAT"
+    ],
+    [
+      19,
+      10,
+      0,
+      15,
+      1,
+      "FLOAT"
+    ],
+    [
+      20,
+      12,
+      0,
+      15,
+      2,
+      "FLOAT"
+    ],
+    [
+      21,
+      18,
+      0,
+      19,
+      0,
+      "LATENT"
+    ],
+    [
+      22,
+      19,
+      0,
+      20,
+      0,
+      "IMAGE"
+    ],
+    [
+      23,
+      19,
+      0,
+      21,
+      0,
+      "IMAGE"
+    ]
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "title": "输入：模型 / 编码器 / VAE / 分辨率",
+      "bounding": [
+        -1030,
+        -360,
+        480,
+        620
+      ],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 2,
+      "title": "提示词",
+      "bounding": [
+        -650,
+        -360,
+        500,
+        500
+      ],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 3,
+      "title": "★ 同步开关组（日常只改「极速档开关」这一个布尔值）",
+      "bounding": [
+        -560,
+        10,
+        840,
+        720
+      ],
+      "color": "#8A8A00",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 4,
+      "title": "采样与输出（单一链路，两档共用；LoRA 在 Switch 之后）",
+      "bounding": [
+        270,
+        -30,
+        930,
+        1220
+      ],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

@@ -1,0 +1,134 @@
+{
+  "id": "image.edit.qwen.fast",
+  "name": "图片编辑",
+  "subtitle": "Qwen Edit · 快速",
+  "category": "edit",
+  "source": "图片编辑.json",
+  "inputs": [
+    {
+      "slot": "source_image",
+      "label": "原图",
+      "media_type": "image",
+      "required": true
+    }
+  ],
+  "fields": [
+    {
+      "name": "instruction",
+      "label": "编辑指令",
+      "type": "textarea",
+      "default": "",
+      "required": true
+    },
+    {
+      "name": "negative_prompt",
+      "label": "避免出现",
+      "type": "textarea",
+      "default": ""
+    },
+    {
+      "name": "output_width",
+      "label": "输出宽度",
+      "type": "number",
+      "default": null,
+      "min": 64,
+      "max": 1280,
+      "step": 16
+    },
+    {
+      "name": "output_height",
+      "label": "输出高度",
+      "type": "number",
+      "default": null,
+      "min": 64,
+      "max": 1280,
+      "step": 16
+    },
+    {
+      "name": "seed",
+      "label": "随机种子",
+      "type": "seed",
+      "default": null
+    }
+  ],
+  "defaults": {},
+  "bindings": {
+    "instruction": [
+      "3",
+      "prompt"
+    ],
+    "negative_prompt": [
+      "4",
+      "prompt"
+    ],
+    "output_width": [
+      "13",
+      "width"
+    ],
+    "output_height": [
+      "13",
+      "height"
+    ],
+    "seed": [
+      "1",
+      "seed"
+    ]
+  },
+  "input_bindings": {
+    "source_image": [
+      "7",
+      "image"
+    ]
+  },
+  "prefixes": [
+    "16"
+  ],
+  "roles": {
+    "16": "final",
+    "15": "preview"
+  },
+  "changes": [
+    "Fixed latent dimensions are declared parameter bindings; preserve single-image Lightning branch."
+  ],
+  "version": "1.0.0",
+  "local_only": true,
+  "source_hash": "500b50e7d23e55c144d4068a605af57cf82ec412f13a22f607534ed6ebcfa788",
+  "template_hash": "c928437570981e90b03bbb94dd540d0c59939191322d0047a600410ff71b7c4f",
+  "required_node_types": [
+    "CFGNorm",
+    "CLIPLoader",
+    "DiffusionModelLoaderKJ",
+    "EmptySD3LatentImage",
+    "KSampler",
+    "LoadImage",
+    "LoraLoaderModelOnly",
+    "ModelSamplingAuraFlow",
+    "PreviewImage",
+    "SaveImage",
+    "TextEncodeQwenImageEditPlus",
+    "VAEDecode",
+    "VAELoader"
+  ],
+  "required_models": [
+    {
+      "node_type": "DiffusionModelLoaderKJ",
+      "field": "model_name",
+      "value": "qwen_image_edit_2511_fp8mixed.safetensors"
+    },
+    {
+      "node_type": "CLIPLoader",
+      "field": "clip_name",
+      "value": "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+    },
+    {
+      "node_type": "LoraLoaderModelOnly",
+      "field": "lora_name",
+      "value": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"
+    },
+    {
+      "node_type": "VAELoader",
+      "field": "vae_name",
+      "value": "qwen_image_vae.safetensors"
+    }
+  ]
+}

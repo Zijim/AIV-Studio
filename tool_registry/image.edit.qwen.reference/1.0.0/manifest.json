@@ -1,0 +1,111 @@
+{
+  "id": "image.edit.qwen.reference",
+  "name": "参考图编辑",
+  "subtitle": "Qwen Edit · 质量",
+  "category": "edit",
+  "source": "图片编辑qwen.json",
+  "inputs": [
+    {
+      "slot": "source_image",
+      "label": "原图",
+      "media_type": "image",
+      "required": true
+    },
+    {
+      "slot": "reference_image",
+      "label": "参考图",
+      "media_type": "image",
+      "required": true
+    }
+  ],
+  "fields": [
+    {
+      "name": "instruction",
+      "label": "编辑指令",
+      "type": "textarea",
+      "default": "",
+      "required": true
+    },
+    {
+      "name": "negative_prompt",
+      "label": "避免出现",
+      "type": "textarea",
+      "default": ""
+    },
+    {
+      "name": "seed",
+      "label": "随机种子",
+      "type": "seed",
+      "default": null
+    }
+  ],
+  "defaults": {},
+  "bindings": {
+    "instruction": [
+      "3",
+      "prompt"
+    ],
+    "negative_prompt": [
+      "4",
+      "prompt"
+    ],
+    "seed": [
+      "22",
+      "seed"
+    ]
+  },
+  "input_bindings": {
+    "source_image": [
+      "7",
+      "image"
+    ],
+    "reference_image": [
+      "8",
+      "image"
+    ]
+  },
+  "prefixes": [
+    "24"
+  ],
+  "roles": {
+    "24": "final"
+  },
+  "changes": [
+    "Two input images required; preserve existing 40-step quality branch."
+  ],
+  "version": "1.0.0",
+  "local_only": true,
+  "source_hash": "f8805149690b2227471ea21d870b74afabd26de2143f2655ffb826712d0f2d0e",
+  "template_hash": "94455860740cd7057b1b9bef94cf36cc260e0cc38ed04e2c5894991b125b961d",
+  "required_node_types": [
+    "CLIPLoader",
+    "DiffusionModelLoaderKJ",
+    "EmptySD3LatentImage",
+    "GetImageSize",
+    "ImageScaleToMaxDimension",
+    "KSampler",
+    "LoadImage",
+    "ModelSamplingAuraFlow",
+    "SaveImage",
+    "TextEncodeQwenImageEditPlus",
+    "VAEDecode",
+    "VAELoader"
+  ],
+  "required_models": [
+    {
+      "node_type": "DiffusionModelLoaderKJ",
+      "field": "model_name",
+      "value": "qwen_image_edit_2511_fp8mixed.safetensors"
+    },
+    {
+      "node_type": "CLIPLoader",
+      "field": "clip_name",
+      "value": "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+    },
+    {
+      "node_type": "VAELoader",
+      "field": "vae_name",
+      "value": "qwen_image_vae.safetensors"
+    }
+  ]
+}

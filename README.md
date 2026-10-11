@@ -1,0 +1,70 @@
+# 映作 · AIV Studio
+
+面向本机 ComfyUI 的个人创作工作台。项目与素材保存在本机，DeepSeek 每轮准备一个方案，用户确认后才执行生成；完成后等待下一轮反馈。
+
+## 启动
+
+需要 Windows、Python 3.12、Node.js 24 和已运行的 ComfyUI 0.31.0 或更新版本。默认 ComfyUI 地址为 `http://127.0.0.1:8188`。安装过程中不改变 ComfyUI 环境。
+
+```powershell
+cd D:\Project\AIV_Agent2
+powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
+powershell -ExecutionPolicy Bypass -File scripts/start.ps1
+```
+
+打开 `http://127.0.0.1:8765`。已安装依赖后，只需运行 `start.ps1`，保留这个终端运行服务。按 Ctrl+C 可以安全关闭，也可以在另一个终端停止应用：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/stop.ps1
+```
+
+默认数据目录是 `%LOCALAPPDATA%\AIVAgent\data`。可复制 `config.example.toml` 为 `config.toml` 自定义路径、端口和连接地址；不要将密钥写入配置文件。设置页内的预算与资源参数存入数据库并立即生效。切换目录时先关闭服务，保留旧目录。
+
+## 使用
+
+1. 新建项目，填写创作目标和风格。
+2. 导入文件、整个文件夹，或通过素材栏“导入ComfyUI既有产物”入口选择本机output目录内文件；Ctrl / Shift 点击可选择多份素材。每批文件显示独立导入结果。
+3. 在设置中保存 **DeepSeek 官方 API Key**，默认模型 ID 是 `deepseek-flash`，对应 DeepSeek V4.1 Flash。也可在启动服务前设置 `DEEPSEEK_API_KEY`。环境变量优先于 Windows 凭据管理器。
+4. 发送需求，助手在后台准备方案，可以放弃正在规划的回合；检查方案中的输入、提示词、候选数量、种子及实际视频时长，点击“确认执行”。不配置密钥时可以使用底部手动工具。
+5. 结果自动归档；打开素材详情填写备注、标记最佳候选、查看来源关系。通过跨项目素材库复用已有素材。
+6. 任务详情显示执行和保存状态。补存只取回已有输出；重做创建新方案，并再次确认执行。
+
+ComfyUI 中已有外部任务时，本应用等待其队列清空。候选串行运行，保留每个候选的执行、种子与产物。应用关闭不会停止已被 ComfyUI 受理的任务，下次启动通过 prompt ID 查询历史与队列；证据丢失时显示结果未知，不自动重复提交。
+
+素材“移除”和项目“移除”都可以恢复，归档项目可以查看、搜索和复用。永久文件清理是设置页中的独立操作，先显示受影响素材与可释放大小，确认时再次核查引用。备份采用 SQLite backup API，包含原文件、工具版本和执行记录；恢复校验后写入独立目录，通过配置切换启用。密钥不进入备份。
+
+## 已接入的工作流
+
+| 工具 | 本机工作流 | 使用方式 |
+| --- | --- | --- |
+| 快速文生图 | 基础文生图.json | Z-Image Turbo，1–4候选 |
+| 精细文生图 | 文生图qwen.json | Qwen Image，快速或质量 |
+| 图片编辑 | 图片编辑.json | 单图快速编辑 |
+| 参考图编辑 | 图片编辑qwen.json | 原图与参考图，质量分支 |
+| 高清放大 | 图像高清放大.json | SeedVR2，检查实际最长边 |
+| 图片生成视频 | video_minimax_h3_i2v.json | MiniMax H3本地，24fps，17k+5帧对齐 |
+
+应用使用 `tool_registry` 中固定版本的 API 模板，不会修改原始工作流。`scripts/prepare_tools.py` 是开发时的导入工具，运行应用不需要 comfy-cli。
+
+发布新工具版本时保留已注册的旧版本目录；运行时仅加载与应用内定义一致的版本，备份中的额外工具定义不会自动成为可调用工具。
+
+## 开发
+
+后端：FastAPI / Pydantic 2 / SQLAlchemy async / SQLite WAL / Alembic / HTTPX / websockets / Pillow / PyAV / keyring。前端：React 19 / TypeScript / Vite / Tailwind 4 / Radix / TanStack Query / Zustand / React Router / React Hook Form / Zod / React Flow。依赖分别锁定在 `backend/requirements.lock` 和 `frontend/package-lock.json`。
+
+```powershell
+$env:AIV_DATA_DIR = "$PWD\.data\dev"
+$env:PYTHONPATH = "$PWD\backend"
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8765
+# 在另一个终端
+cd frontend
+npm.cmd run dev
+```
+
+Vite 端口5173代理 `/api` 到后端。生产界面使用 `npm.cmd run build` 构建后由后端同源提供。后端只运行一个 worker，应用目录有进程锁。配置与数据库迁移在启动时完成，迁移前备份已有数据库。
+
+本地 API 文档：`http://127.0.0.1:8765/docs`。写接口需要先 GET `/api/v1/session`，保留会话 cookie，设置同源 `Origin` 和响应中的 `X-AIV-CSRF`。这里只支持回环地址。
+
+费用按2026-10-11核实的高峰单价估算，实际费用以 DeepSeek 官方账单为准。默认每日预算$0.50、每轮$0.05；模型网络或认证错误不自动重试，未知用量继续占用预留预算。
+
+当前助手使用文字、素材备注与媒体信息准备方案；没有自动图像视觉评估。完整的模型联网闭环需要有效 DeepSeek 密钥。正式测试用例按此前约定后续补充，当前验证记录见 `DEVELOPMENT.md`。

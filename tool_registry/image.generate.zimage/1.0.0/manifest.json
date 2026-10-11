@@ -1,0 +1,111 @@
+{
+  "id": "image.generate.zimage",
+  "name": "快速文生图",
+  "subtitle": "Z-Image Turbo",
+  "category": "generate",
+  "source": "基础文生图.json",
+  "inputs": [],
+  "fields": [
+    {
+      "name": "prompt",
+      "label": "创作描述",
+      "type": "textarea",
+      "default": "",
+      "required": true
+    },
+    {
+      "name": "negative_prompt",
+      "label": "避免出现",
+      "type": "textarea",
+      "default": ""
+    },
+    {
+      "name": "width",
+      "label": "宽度",
+      "type": "number",
+      "default": 1024,
+      "min": 512,
+      "max": 1536,
+      "step": 32
+    },
+    {
+      "name": "height",
+      "label": "高度",
+      "type": "number",
+      "default": 1024,
+      "min": 512,
+      "max": 1536,
+      "step": 32
+    },
+    {
+      "name": "seed",
+      "label": "随机种子",
+      "type": "seed",
+      "default": null
+    }
+  ],
+  "defaults": {},
+  "bindings": {
+    "prompt": [
+      "3",
+      "text"
+    ],
+    "negative_prompt": [
+      "4",
+      "text"
+    ],
+    "width": [
+      "5",
+      "width"
+    ],
+    "height": [
+      "5",
+      "height"
+    ],
+    "seed": [
+      "1",
+      "seed"
+    ]
+  },
+  "prefixes": [
+    "12"
+  ],
+  "roles": {
+    "12": "final",
+    "8": "preview"
+  },
+  "changes": [],
+  "version": "1.0.0",
+  "local_only": true,
+  "source_hash": "0b99d8389a9505c81520cacd47794ba50342500e37deda0aa6bce0c18a6be94f",
+  "template_hash": "2e20772fdc6b5592122421ca9d56ff3d592eff31ded7c1e0964d03ba7c5cde04",
+  "required_node_types": [
+    "CLIPLoader",
+    "CLIPTextEncode",
+    "EmptySD3LatentImage",
+    "KSampler",
+    "ModelSamplingAuraFlow",
+    "PreviewImage",
+    "SaveImage",
+    "UNETLoader",
+    "VAEDecode",
+    "VAELoader"
+  ],
+  "required_models": [
+    {
+      "node_type": "UNETLoader",
+      "field": "unet_name",
+      "value": "z_image_turbo_bf16.safetensors"
+    },
+    {
+      "node_type": "CLIPLoader",
+      "field": "clip_name",
+      "value": "qwen_3_4b.safetensors"
+    },
+    {
+      "node_type": "VAELoader",
+      "field": "vae_name",
+      "value": "ae.safetensors"
+    }
+  ]
+}

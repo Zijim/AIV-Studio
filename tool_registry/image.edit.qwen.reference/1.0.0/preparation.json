@@ -1,0 +1,8 @@
+{
+  "source": "F:\\ComfyUI\\ComfyUI_windows_portable\\ComfyUI\\user\\default\\workflows\\图片编辑qwen.json",
+  "changes": [
+    "Two input images required; preserve existing 40-step quality branch."
+  ],
+  "source_hash": "f8805149690b2227471ea21d870b74afabd26de2143f2655ffb826712d0f2d0e",
+  "template_hash": "94455860740cd7057b1b9bef94cf36cc260e0cc38ed04e2c5894991b125b961d"
+}

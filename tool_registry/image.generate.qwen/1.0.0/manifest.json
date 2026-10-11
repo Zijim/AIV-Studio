@@ -1,0 +1,139 @@
+{
+  "id": "image.generate.qwen",
+  "name": "精细文生图",
+  "subtitle": "Qwen Image 2512",
+  "category": "generate",
+  "source": "文生图qwen.json",
+  "inputs": [],
+  "fields": [
+    {
+      "name": "prompt",
+      "label": "创作描述",
+      "type": "textarea",
+      "default": "",
+      "required": true
+    },
+    {
+      "name": "negative_prompt",
+      "label": "避免出现",
+      "type": "textarea",
+      "default": ""
+    },
+    {
+      "name": "width",
+      "label": "宽度",
+      "type": "number",
+      "default": 1024,
+      "min": 512,
+      "max": 1536,
+      "step": 32
+    },
+    {
+      "name": "height",
+      "label": "高度",
+      "type": "number",
+      "default": 1024,
+      "min": 512,
+      "max": 1536,
+      "step": 32
+    },
+    {
+      "name": "preset",
+      "label": "生成档位",
+      "type": "select",
+      "default": "fast",
+      "options": [
+        {
+          "value": "fast",
+          "label": "快速 · 4步"
+        },
+        {
+          "value": "quality",
+          "label": "质量 · 50步"
+        }
+      ]
+    },
+    {
+      "name": "seed",
+      "label": "随机种子",
+      "type": "seed",
+      "default": null
+    }
+  ],
+  "defaults": {},
+  "bindings": {
+    "prompt": [
+      "4",
+      "text"
+    ],
+    "negative_prompt": [
+      "5",
+      "text"
+    ],
+    "width": [
+      "6",
+      "width"
+    ],
+    "height": [
+      "6",
+      "height"
+    ],
+    "seed": [
+      "18",
+      "seed"
+    ]
+  },
+  "prefixes": [
+    "21"
+  ],
+  "roles": {
+    "21": "final",
+    "20": "preview"
+  },
+  "changes": [
+    "Normalize prompt widgets to strings; preset controls the existing switch."
+  ],
+  "version": "1.0.0",
+  "local_only": true,
+  "source_hash": "0a230b3590049d3339c098a1047e380f257708e36ffdfb3d38c910d91b27deca",
+  "template_hash": "7696f7f836312ebd46c1e7a64665a9268ce8cf485065307d17aab5b261d2d47d",
+  "required_node_types": [
+    "CLIPLoader",
+    "CLIPTextEncode",
+    "ComfySwitchNode",
+    "EmptySD3LatentImage",
+    "KSampler",
+    "LoraLoaderModelOnly",
+    "ModelSamplingAuraFlow",
+    "PreviewImage",
+    "PrimitiveBoolean",
+    "PrimitiveFloat",
+    "PrimitiveInt",
+    "SaveImage",
+    "UNETLoader",
+    "VAEDecode",
+    "VAELoader"
+  ],
+  "required_models": [
+    {
+      "node_type": "UNETLoader",
+      "field": "unet_name",
+      "value": "qwen_image_2512_fp8_e4m3fn.safetensors"
+    },
+    {
+      "node_type": "CLIPLoader",
+      "field": "clip_name",
+      "value": "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+    },
+    {
+      "node_type": "VAELoader",
+      "field": "vae_name",
+      "value": "qwen_image_vae.safetensors"
+    },
+    {
+      "node_type": "LoraLoaderModelOnly",
+      "field": "lora_name",
+      "value": "Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors"
+    }
+  ]
+}

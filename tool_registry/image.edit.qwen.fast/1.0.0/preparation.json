@@ -1,0 +1,8 @@
+{
+  "source": "F:\\ComfyUI\\ComfyUI_windows_portable\\ComfyUI\\user\\default\\workflows\\图片编辑.json",
+  "changes": [
+    "Fixed latent dimensions are declared parameter bindings; preserve single-image Lightning branch."
+  ],
+  "source_hash": "500b50e7d23e55c144d4068a605af57cf82ec412f13a22f607534ed6ebcfa788",
+  "template_hash": "c928437570981e90b03bbb94dd540d0c59939191322d0047a600410ff71b7c4f"
+}

@@ -1,0 +1,8 @@
+{
+  "source": "F:\\ComfyUI\\ComfyUI_windows_portable\\ComfyUI\\user\\default\\workflows\\文生图qwen.json",
+  "changes": [
+    "Normalize prompt widgets to strings; preset controls the existing switch."
+  ],
+  "source_hash": "0a230b3590049d3339c098a1047e380f257708e36ffdfb3d38c910d91b27deca",
+  "template_hash": "7696f7f836312ebd46c1e7a64665a9268ce8cf485065307d17aab5b261d2d47d"
+}

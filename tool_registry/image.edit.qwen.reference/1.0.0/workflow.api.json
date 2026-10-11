@@ -1,0 +1,219 @@
+{
+  "2": {
+    "inputs": {
+      "model_name": "qwen_image_edit_2511_fp8mixed.safetensors",
+      "weight_dtype": "default",
+      "compute_dtype": "default",
+      "patch_cublaslinear": false,
+      "sage_attention": "disabled",
+      "enable_fp16_accumulation": false
+    },
+    "class_type": "DiffusionModelLoaderKJ",
+    "_meta": {
+      "title": "主模型 Qwen-Image-Edit-2511 fp8"
+    }
+  },
+  "5": {
+    "inputs": {
+      "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "文本编码器"
+    }
+  },
+  "6": {
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "VAE"
+    }
+  },
+  "7": {
+    "inputs": {
+      "image": "preview.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "image1 原图（必填）"
+    }
+  },
+  "8": {
+    "inputs": {
+      "image": "1836007d-862c-4ea4-a118-0d40d27b4e43.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "image2 参考图（可选）"
+    }
+  },
+  "18": {
+    "inputs": {
+      "upscale_method": "area",
+      "largest_size": 1280,
+      "image": [
+        "7",
+        0
+      ]
+    },
+    "class_type": "ImageScaleToMaxDimension",
+    "_meta": {
+      "title": "Scale Image to Max Dimension"
+    }
+  },
+  "19": {
+    "inputs": {
+      "image": [
+        "18",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Image Size"
+    }
+  },
+  "3": {
+    "inputs": {
+      "prompt": "把图1骑士的盔甲替换为图2的盔甲",
+      "clip": [
+        "5",
+        0
+      ],
+      "vae": [
+        "6",
+        0
+      ],
+      "image1": [
+        "7",
+        0
+      ],
+      "image2": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "_meta": {
+      "title": "正向提示词 = 编辑指令"
+    }
+  },
+  "4": {
+    "inputs": {
+      "prompt": "低质量, 模糊, 变形, 多余手指, 水印, 错字",
+      "clip": [
+        "5",
+        0
+      ],
+      "vae": [
+        "6",
+        0
+      ],
+      "image1": [
+        "7",
+        0
+      ],
+      "image2": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "_meta": {
+      "title": "负向提示词"
+    }
+  },
+  "13": {
+    "inputs": {
+      "batch_size": 1,
+      "width": [
+        "19",
+        0
+      ],
+      "height": [
+        "19",
+        1
+      ]
+    },
+    "class_type": "EmptySD3LatentImage",
+    "_meta": {
+      "title": "输出尺寸（跟随 image1 缩放后的尺寸）"
+    }
+  },
+  "21": {
+    "inputs": {
+      "shift": 3.0,
+      "model": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingAuraFlow",
+    "_meta": {
+      "title": "ModelSamplingAuraFlow 画质档 shift 3.0"
+    }
+  },
+  "22": {
+    "inputs": {
+      "seed": 142744690075909,
+      "steps": 40,
+      "cfg": 4.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0,
+      "model": [
+        "21",
+        0
+      ],
+      "positive": [
+        "3",
+        0
+      ],
+      "negative": [
+        "4",
+        0
+      ],
+      "latent_image": [
+        "13",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler 画质档 40步 CFG4.0"
+    }
+  },
+  "23": {
+    "inputs": {
+      "samples": [
+        "22",
+        0
+      ],
+      "vae": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAEDecode 画质档"
+    }
+  },
+  "24": {
+    "inputs": {
+      "filename_prefix": "qwen_edit",
+      "images": [
+        "23",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "SaveImage 画质档"
+    }
+  }
+}

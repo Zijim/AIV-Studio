@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.md whitespace=-blank-at-eol
+
+# Preserve the exact bytes used by the pinned workflow integrity checks.
+tool_registry/** -text whitespace=cr-at-eol

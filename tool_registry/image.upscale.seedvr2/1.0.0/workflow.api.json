@@ -1,0 +1,118 @@
+{
+  "3": {
+    "inputs": {
+      "model": "seedvr2_ema_3b_fp8_e4m3fn.safetensors",
+      "device": "cuda:0",
+      "blocks_to_swap": 16,
+      "swap_io_components": true,
+      "offload_device": "cpu",
+      "cache_model": false,
+      "attention_mode": "sdpa"
+    },
+    "class_type": "SeedVR2LoadDiTModel",
+    "_meta": {
+      "title": "② SeedVR2 3B FP8 · 模型与显存"
+    }
+  },
+  "4": {
+    "inputs": {
+      "model": "ema_vae_fp16.safetensors",
+      "device": "cuda:0",
+      "encode_tiled": true,
+      "encode_tile_size": 512,
+      "encode_tile_overlap": 64,
+      "decode_tiled": true,
+      "decode_tile_size": 512,
+      "decode_tile_overlap": 64,
+      "tile_debug": "false",
+      "offload_device": "cpu",
+      "cache_model": false
+    },
+    "class_type": "SeedVR2LoadVAEModel",
+    "_meta": {
+      "title": "③ 专用 VAE · 分块编码 / 解码"
+    }
+  },
+  "5": {
+    "inputs": {
+      "seed": 42,
+      "resolution": 2048,
+      "max_resolution": 3072,
+      "batch_size": 1,
+      "uniform_batch_size": false,
+      "color_correction": "lab",
+      "temporal_overlap": 0,
+      "prepend_frames": 0,
+      "input_noise_scale": 0,
+      "latent_noise_scale": 0,
+      "offload_device": "cpu",
+      "enable_debug": false,
+      "image": [
+        "1",
+        0
+      ],
+      "dit": [
+        "3",
+        0
+      ],
+      "vae": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "SeedVR2VideoUpscaler",
+    "_meta": {
+      "title": "④ 高清放大 · 在此调节尺寸与效果"
+    }
+  },
+  "6": {
+    "inputs": {
+      "filename_prefix": "SeedVR2/高清放大",
+      "images": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "⑥ 输出预览与保存 · PNG"
+    }
+  },
+  "2": {
+    "inputs": {
+      "image": [
+        "5",
+        0
+      ],
+      "alpha": [
+        "1",
+        1
+      ]
+    },
+    "class_type": "JoinImageWithAlpha",
+    "_meta": {
+      "title": "⑤ 恢复原图透明度 · 自动匹配尺寸"
+    }
+  },
+  "1": {
+    "inputs": {
+      "image": "0542d5933dc5811f3788a85c5c9b5aec-removebg-preview (1).png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "① 输入图片 · 点击上传更换"
+    }
+  },
+  "11": {
+    "inputs": {
+      "images": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+.venv/
+node_modules/
+frontend/dist/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.data/
+.env
+.env.*
+!.env.example
+config.toml
+*.log
+comfy_probe/outputs/
+comfy_probe/records/
+comfy_probe/workflows/
+*.sqlite3*
+*.tsbuildinfo

@@ -1,0 +1,278 @@
+{
+  "1": {
+    "inputs": {
+      "unet_name": "qwen_image_2512_fp8_e4m3fn.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "① 主模型 Qwen-Image-2512 fp8"
+    }
+  },
+  "2": {
+    "inputs": {
+      "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "② 文本编码器（type=qwen_image）"
+    }
+  },
+  "3": {
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "③ VAE"
+    }
+  },
+  "6": {
+    "inputs": {
+      "width": 1328,
+      "height": 1328,
+      "batch_size": 1
+    },
+    "class_type": "EmptySD3LatentImage",
+    "_meta": {
+      "title": "④ 分辨率 1328x1328（1:1 原生）"
+    }
+  },
+  "4": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "⑤ 正向提示词"
+    }
+  },
+  "5": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "⑥ 负向提示词（官方默认）"
+    }
+  },
+  "11": {
+    "inputs": {
+      "value": true
+    },
+    "class_type": "PrimitiveBoolean",
+    "_meta": {
+      "title": "★ 极速档开关（false=画质档 / true=极速档）"
+    }
+  },
+  "8": {
+    "inputs": {
+      "value": 50
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "步数 on_false → 画质档 50 步"
+    }
+  },
+  "9": {
+    "inputs": {
+      "value": 4
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "步数 on_true → 极速档 4 步"
+    }
+  },
+  "10": {
+    "inputs": {
+      "value": 4
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "CFG on_false → 画质档 CFG 4.0"
+    }
+  },
+  "12": {
+    "inputs": {
+      "value": 1
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "CFG on_true → 极速档 CFG 1.0"
+    }
+  },
+  "7": {
+    "inputs": {
+      "lora_name": "Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors",
+      "strength_model": 1,
+      "model": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "⑦ Lightning LoRA（只喂给 Switch 的 true 侧）"
+    }
+  },
+  "13": {
+    "inputs": {
+      "switch": [
+        "11",
+        0
+      ],
+      "on_false": [
+        "1",
+        0
+      ],
+      "on_true": [
+        "7",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "模型 Switch（false=直连 / true=经 LoRA）"
+    }
+  },
+  "14": {
+    "inputs": {
+      "switch": [
+        "11",
+        0
+      ],
+      "on_false": [
+        "8",
+        0
+      ],
+      "on_true": [
+        "9",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "步数 Switch（false=50 / true=4）→ KSampler.steps"
+    }
+  },
+  "15": {
+    "inputs": {
+      "switch": [
+        "11",
+        0
+      ],
+      "on_false": [
+        "10",
+        0
+      ],
+      "on_true": [
+        "12",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "CFG Switch（false=4.0 / true=1.0）→ KSampler.cfg"
+    }
+  },
+  "17": {
+    "inputs": {
+      "shift": 3.1,
+      "model": [
+        "13",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingAuraFlow",
+    "_meta": {
+      "title": "⑧ ModelSamplingAuraFlow（shift 3.1，在 Switch 之后）"
+    }
+  },
+  "18": {
+    "inputs": {
+      "seed": 72203334542782,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "17",
+        0
+      ],
+      "steps": [
+        "14",
+        0
+      ],
+      "cfg": [
+        "15",
+        0
+      ],
+      "positive": [
+        "4",
+        0
+      ],
+      "negative": [
+        "5",
+        0
+      ],
+      "latent_image": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "⑨ KSampler（steps/cfg 由 Switch 输入口接管）"
+    }
+  },
+  "19": {
+    "inputs": {
+      "samples": [
+        "18",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "⑩ VAEDecode（唯一，两档共用）"
+    }
+  },
+  "20": {
+    "inputs": {
+      "images": [
+        "19",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "⑪ 预览"
+    }
+  },
+  "21": {
+    "inputs": {
+      "filename_prefix": "qwen_2512",
+      "images": [
+        "19",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "⑫ SaveImage（两档共用）"
+    }
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "id": "image.upscale.seedvr2",
+  "name": "高清放大",
+  "subtitle": "SeedVR2 · 3B FP8",
+  "category": "upscale",
+  "source": "图像高清放大.json",
+  "inputs": [
+    {
+      "slot": "source_image",
+      "label": "原图",
+      "media_type": "image",
+      "required": true
+    }
+  ],
+  "fields": [
+    {
+      "name": "scale",
+      "label": "放大倍率",
+      "type": "number",
+      "default": 2,
+      "min": 1,
+      "max": 4,
+      "step": 0.5
+    },
+    {
+      "name": "seed",
+      "label": "随机种子",
+      "type": "seed",
+      "default": null
+    }
+  ],
+  "defaults": {},
+  "bindings": {
+    "resolution": [
+      "5",
+      "resolution"
+    ],
+    "max_resolution": [
+      "5",
+      "max_resolution"
+    ],
+    "seed": [
+      "5",
+      "seed"
+    ]
+  },
+  "input_bindings": {
+    "source_image": [
+      "1",
+      "image"
+    ]
+  },
+  "prefixes": [
+    "6"
+  ],
+  "roles": {
+    "6": "final",
+    "11": "preview"
+  },
+  "changes": [],
+  "version": "1.0.0",
+  "local_only": true,
+  "source_hash": "fdb6aec0eca387aef4dc9b8cd4b2eeb5790f5b5c13bf120692e40c5c56fae718",
+  "template_hash": "cd680ce1be7fd950fdead624307e59d6846310f45ef029ece003a8370724f777",
+  "required_node_types": [
+    "JoinImageWithAlpha",
+    "LoadImage",
+    "PreviewImage",
+    "SaveImage",
+    "SeedVR2LoadDiTModel",
+    "SeedVR2LoadVAEModel",
+    "SeedVR2VideoUpscaler"
+  ],
+  "required_models": [
+    {
+      "node_type": "SeedVR2LoadDiTModel",
+      "field": "model",
+      "value": "seedvr2_ema_3b_fp8_e4m3fn.safetensors"
+    },
+    {
+      "node_type": "SeedVR2LoadVAEModel",
+      "field": "model",
+      "value": "ema_vae_fp16.safetensors"
+    }
+  ]
+}
