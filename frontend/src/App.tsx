@@ -1541,7 +1541,10 @@ function ToolEditor({
                   <select
                     value={params[field.name]}
                     onChange={(e) => {
-                      const next: Data = { ...params, [field.name]: e.target.value };
+                      const next: Data = {
+                        ...params,
+                        [field.name]: e.target.value,
+                      };
                       if (
                         tool.id === "image.generate.qwen" &&
                         field.name === "preset" &&
@@ -2110,6 +2113,15 @@ function SettingsDialog({
             )}
             <p className="muted">
               助手会发送需求、项目背景和素材描述。图像与视频在本机生成；密钥不写入工作流或备份。
+            </p>
+            <p className="muted">
+              输入上限 {(s.max_input_tokens / 1024).toFixed(0)}K tokens，达到
+              {((s.history_summary_threshold_tokens ?? 98304) / 1024).toFixed(
+                0,
+              )}
+              K 时整理较早对话，输出上限{" "}
+              {(s.max_output_tokens / 1024).toFixed(0)}K。
+              原始聊天记录完整保存在本机，历史整理调用计入模型费用。
             </p>
             <div className="budget-card">
               <span>

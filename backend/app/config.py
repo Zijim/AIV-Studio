@@ -20,10 +20,12 @@ class Settings(BaseSettings):
     llm_url: str = "https://api.deepseek.com"
     llm_model: str = "deepseek-flash"
     reasoning_effort: str = "low"
-    max_input_tokens: int = 16000
-    max_output_tokens: int = 4096
+    max_input_tokens: int = 128 * 1024
+    history_summary_threshold_tokens: int = 96 * 1024
+    history_recent_tokens: int = 24 * 1024
+    max_output_tokens: int = 8 * 1024
     llm_timeout: int = 60
-    turn_budget_usd: float = 0.05
+    turn_budget_usd: float = 0.15
     daily_budget_usd: float = 0.50
     minimum_free_bytes: int = 2 * 1024**3
     max_import_file_bytes: int = 2 * 1024**3
@@ -57,6 +59,8 @@ def load_settings() -> Settings:
                 "model": "llm_model",
                 "reasoning_effort": "reasoning_effort",
                 "max_input_tokens": "max_input_tokens",
+                "history_summary_threshold_tokens": "history_summary_threshold_tokens",
+                "history_recent_tokens": "history_recent_tokens",
                 "max_output_tokens": "max_output_tokens",
                 "timeout_seconds": "llm_timeout",
                 "turn_budget_usd": "turn_budget_usd",

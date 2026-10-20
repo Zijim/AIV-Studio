@@ -3,3 +3,4 @@
 
 # Preserve the exact bytes used by the pinned workflow integrity checks.
 tool_registry/** -text whitespace=cr-at-eol
+backend/resources/** -text whitespace=cr-at-eol

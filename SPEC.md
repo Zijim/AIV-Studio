@@ -67,7 +67,7 @@ React/Vite 的选择与本机 Node 24 相容，构建要求见 [Vite 官方说�
 
 通过 `AsyncOpenAI(api_key=deepseek_key, base_url=deepseek_base_url, max_retries=0)` 作为兼容HTTP客户端，调用 `client.responses.create`。`text.format` 使用 `type=json_schema`、schema名称与 Pydantic 生成的JSON Schema；返回内容再经 `PlannerResult.model_validate_json` 和后台语义校验。SDK名称不改变供应商，请求只发往配置的DeepSeek官方地址；不要求OpenAI API Key。[DeepSeek Responses调用与兼容说明](https://api-docs.deepseek.com/guides/responses_api/)、[请求字段](https://api-docs.deepseek.com/api/create-response/)
 
-默认请求参数：`reasoning.effort=low`、`max_output_tokens=4096`、60 秒客户端超时。仅发送DeepSeek明确支持的字段；不发送`store`、`previous_response_id`、`conversation`、`background`等不支持的状态管理参数。DeepSeek Responses是无状态接口，每次发送本地组织的必要历史。只发送本产品准备的文本上下文，不启用供应商在线搜索、代码执行或远程MCP，首版不上传图片/视频给语言模型。
+默认请求参数：`reasoning.effort=low`、`max_output_tokens=8192`、60 秒客户端超时。仅发送DeepSeek明确支持的字段；不发送`store`、`previous_response_id`、`conversation`、`background`等不支持的状态管理参数。DeepSeek Responses是无状态接口，每次发送本地组织的必要历史。只发送本产品准备的文本上下文，不启用供应商在线搜索、代码执行或远程MCP，首版不上传图片/视频给语言模型。
 
 `deepseek-flash` 是官方模型别名，不能按固定快照保证后端版本不变。每次调用保存请求模型ID、响应model、当时文档标注的模型版本与记录时间，以及供应商返回的可得版本信息；官方更新别名指向后记录变化，不自动声称仍是同一快照。
 
@@ -216,7 +216,7 @@ flowchart LR
 
 后台创建不可变 context snapshot，包括当前项目目标/风格及 revision、当前用户诉求、明确选择、可用工具、相关素材身份/类型/尺寸/备注、最近完成任务的实际输入/参数和近期对话。
 
-近期对话默认最多 20 条；相关素材最多 30 个，不向模型发送完整素材库。直接关联上一次执行和用户明确指定素材，不因裁剪对话丢失这些事实。超出输入预算时按相关性裁剪普通历史，必要事实不能省略；仍超限则提示用户缩短输入。
+输入上限默认128K tokens，达到96K时整理较早对话；不固定限制消息条数或截断每条消息。整理时按token预算保留约24K的近期完整消息，至少保留最近两条，其余较早内容与已有摘要合并。摘要按项目持久保存覆盖边界、版本和消息数量，原始消息不删除；后续只处理边界后的新增历史。每批摘要输入最多64K、输出最多4K，每轮最多4批，调用与规划共用费用预算，失败不静默丢弃历史。相关素材最多30个明确选择，不向模型发送完整素材库。直接关联上一次执行和用户明确指定素材；必要背景、当前需求、草案、明确选择与来源参数仍超限时提示用户缩短输入或减少选择。
 
 不依赖云端 conversation 作为唯一历史，不使用未落盘的 previous_response_id 维护项目上下文。对话、计划、执行与素材身份由本地数据库保存。
 
@@ -582,9 +582,9 @@ SSE事件包括 `turn.updated / plan.created / task.updated / execution.progress
 | 上传/查询/提交HTTP超时 | 上传60秒、查询10秒、提交30秒 | 查询有界重试，提交结果未知须核实 |
 | 数据磁盘保留空间 | 2 GiB | 阻止新生成/导入；保留补存入口，失败如实记录 |
 | 语言模型请求超时 | 60秒 | 明确错误，未知费用占用不立即释放 |
-| 每回合模型生成请求数 | ≤2 | 停止并说明；输入计数/估算在本地完成，不额外发模型生成请求 |
-| 模型输入/输出 | 输入预算预估≤16000 tokens，输出≤4096 tokens/请求 | 裁剪普通历史或拒绝超限；实际input usage另行记录 |
-| 模型预算 | 每回合0.05 USD、每日0.50 USD | 预估占用不足时不发新的模型生成请求 |
+| 每回合模型生成请求数 | 方案≤2，历史整理≤4 | 所有调用共享费用预算；输入计数在本地完成 |
+| 模型输入/输出 | 输入预算≤131072 tokens，方案输出≤8192 tokens/请求 | 达到98304 tokens时整理旧历史，近期消息保持完整；实际input usage另行记录 |
+| 模型预算 | 每回合0.15 USD、每日0.50 USD | 预估占用不足时不发新的模型生成请求 |
 | 资源刷新 | 活动时5秒，空闲30秒 | 显示瞬时信息，无可靠估算则不显示剩余时间 |
 
 执行超时从服务器确认execution_start/running开始计算，等待外部任务不计为执行时间。超时进入cancel_requested，不先伪造已终止。连接中断时仍记录墙钟边界，恢复连接后核实或定向取消该ID。
@@ -593,7 +593,7 @@ SSE事件包括 `turn.updated / plan.created / task.updated / execution.progress
 
 ### 14.2 费用核算
 
-DeepSeek适配器不依赖OpenAI专属的 `responses.input_tokens.count` 接口。输入预算在本地保守估算：以UTF-8编码的规范化input/instructions/schema/工具说明的字节总数，再加2048个封装预留token作为初始上界估算；超限先裁剪普通历史，必要事实不能删除。此值用于保守预算，不宣称是供应商精确分词结果。以后可接入经版本核对的DeepSeek官方离线tokenizer，估算方法与版本必须记录，不能直接套用其他模型的分词器。实际计数以响应usage为准。[DeepSeek token使用说明](https://api-docs.deepseek.com/quick_start/token_usage/)
+DeepSeek适配器不依赖OpenAI专属的 `responses.input_tokens.count` 接口。使用固定提交版本的DeepSeek V4.1 Flash官方离线tokenizer，原文件和来源/SHA-256随应用发布。对模型实际读取的instructions、input文本和schema分别分词，统一加5%和512 tokens的供应商封装余量；不对HTTP JSON中再次转义的字符串重复计数。上下文整理、最终输入校验和费用预留共用同一计数函数，并为最多一次方案修复额外保留2048 tokens空间。实际供应商计数仍以响应usage为准。[DeepSeek官方模型与分词器](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash)
 
 预留金额按保守输入估算、全部缓存未命中 + max_output_tokens输出计算，调用前通过数据库事务同时核查回合/每日余额；完成后按 `usage.input_tokens`、`input_tokens_details.cached_tokens` 和 `usage.output_tokens` 更新估算并释放多余占用。`output_tokens_details.reasoning_tokens` 是输出中的拆分项，不重复加总计费。金额使用Decimal/整数微美元保存，不用二进制浮点累计余额。
 
@@ -625,11 +625,13 @@ base_url = "https://api.deepseek.com"
 model = "deepseek-flash" # 当前对应DeepSeek V4.1 Flash
 api_key_env = "DEEPSEEK_API_KEY"
 reasoning_effort = "low"
-max_input_tokens = 16000
-max_output_tokens = 4096
+max_input_tokens = 131072
+history_summary_threshold_tokens = 98304
+history_recent_tokens = 24576
+max_output_tokens = 8192
 timeout_seconds = 60
 max_generation_calls_per_turn = 2
-turn_budget_usd = 0.05
+turn_budget_usd = 0.15
 daily_budget_usd = 0.50
 # 密钥不写入TOML
 
