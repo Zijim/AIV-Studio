@@ -6,9 +6,10 @@ import shutil
 import httpx
 from fastapi import APIRouter, Body, File, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import String, func, select, text
+from sqlalchemy import String, and_, func, or_, select, text
 
 from .config import ROOT
+from .conversations import resolve_conversation
 from .errors import AppError
 from .models import (
     Artifact,
@@ -116,6 +117,7 @@ async def create_project(request: Request, body: ProjectCreate):
         project = Project(**body.model_dump())
         s.add(project)
         await s.flush()
+        await resolve_conversation(s, project.id)
         record_event(s, "project.updated", project.id, project.id)
         return row_dict(project)
 
@@ -410,14 +412,28 @@ async def lineage(request: Request, asset_id: str, depth: int = Query(3, ge=1, l
 
 
 @router.get("/projects/{project_id}/messages")
-async def messages(request: Request, project_id: str, limit: int = Query(100, ge=1, le=300)):
-    async with svc(request).db.session() as s:
+async def messages(
+    request: Request,
+    project_id: str,
+    limit: int = Query(100, ge=1, le=300),
+    conversation_id: str | None = None,
+    before: str | None = None,
+):
+    async with svc(request).db.transaction() as s:
         await require_project(s, project_id)
-        rows = (
-            await s.scalars(
-                select(Message).where(Message.project_id == project_id).order_by(Message.created_at.desc()).limit(limit)
+        conversation = await resolve_conversation(s, project_id, conversation_id)
+        query = select(Message).where(Message.project_id == project_id, Message.conversation_id == conversation.id)
+        if before:
+            boundary = await s.get(Message, before)
+            if not boundary or boundary.project_id != project_id or boundary.conversation_id != conversation.id:
+                raise AppError("message_cursor", "消息分页位置不属于当前对话。")
+            query = query.where(
+                or_(
+                    Message.created_at < boundary.created_at,
+                    and_(Message.created_at == boundary.created_at, Message.id < boundary.id),
+                )
             )
-        ).all()
+        rows = (await s.scalars(query.order_by(Message.created_at.desc(), Message.id.desc()).limit(limit))).all()
         return [row_dict(m) for m in reversed(rows)]
 
 
@@ -442,12 +458,13 @@ async def send_message(request: Request, project_id: str, body: MessageRequest):
 
 
 @router.get("/projects/{project_id}/plans")
-async def plans(request: Request, project_id: str):
-    async with svc(request).db.session() as s:
+async def plans(request: Request, project_id: str, conversation_id: str | None = None):
+    async with svc(request).db.transaction() as s:
         await require_project(s, project_id)
+        conversation = await resolve_conversation(s, project_id, conversation_id)
         latest = (
             select(Plan.id, func.max(Plan.revision).label("revision"))
-            .where(Plan.project_id == project_id)
+            .where(Plan.project_id == project_id, Plan.conversation_id == conversation.id)
             .group_by(Plan.id)
             .subquery()
         )
@@ -586,6 +603,7 @@ async def retry_task(request: Request, task_id: str):
             based_on_execution_id=e.id,
         ),
         origin="retry",
+        conversation_id=t.conversation_id,
     )
     return result
 

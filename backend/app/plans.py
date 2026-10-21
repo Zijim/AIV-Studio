@@ -3,6 +3,7 @@ import json
 
 from sqlalchemy import func, select
 
+from .conversations import resolve_conversation, touch_conversation
 from .errors import AppError
 from .models import (
     AgentTurn,
@@ -55,6 +56,7 @@ class PlanService:
         origin="manual",
         preserve_seed=False,
         replace_owner=False,
+        conversation_id=None,
     ):
         tool = self.registry.get(request.tool_id)
         # Derived values are recomputed, never trusted when a plan is edited.
@@ -67,6 +69,31 @@ class PlanService:
             values.pop(key, None)
         async with self.db.transaction() as session:
             project = await require_project(session, project_id, writable=True)
+            latest = None
+            if plan_id:
+                latest = await session.scalar(
+                    select(Plan).where(Plan.id == plan_id).order_by(Plan.revision.desc()).limit(1)
+                )
+                if not latest or latest.project_id != project_id:
+                    raise AppError("plan_not_found", "方案不存在。", 404)
+                if request.conversation_id and request.conversation_id != latest.conversation_id:
+                    raise AppError("conversation_mismatch", "方案不能转移到其他对话。", 409)
+            conversation = await resolve_conversation(
+                session,
+                project_id,
+                conversation_id or request.conversation_id or (latest.conversation_id if latest else None),
+                writable=True,
+            )
+            if latest and latest.conversation_id != conversation.id:
+                raise AppError("conversation_mismatch", "方案不能转移到其他对话。", 409)
+            if turn_id:
+                owner = await session.get(AgentTurn, turn_id)
+                if not owner or owner.project_id != project_id or owner.conversation_id != conversation.id:
+                    raise AppError("conversation_mismatch", "方案回合不属于当前对话。", 409)
+            if context_id:
+                context = await session.get(ContextSnapshot, context_id)
+                if not context or context.project_id != project_id or context.conversation_id != conversation.id:
+                    raise AppError("conversation_mismatch", "方案上下文不属于当前对话。", 409)
             if request.based_on_execution_id:
                 source = await session.get(Execution, request.based_on_execution_id)
                 source_task = await session.get(Task, source.task_id) if source else None
@@ -87,11 +114,6 @@ class PlanService:
             )
             revision = 1
             if plan_id:
-                latest = await session.scalar(
-                    select(Plan).where(Plan.id == plan_id).order_by(Plan.revision.desc()).limit(1)
-                )
-                if not latest or latest.project_id != project_id:
-                    raise AppError("plan_not_found", "方案不存在。", 404)
                 if latest.revision != expected_revision:
                     raise AppError("revision_conflict", "方案已更新，请刷新后再修改。", 409)
                 if latest.state != "draft":
@@ -110,6 +132,7 @@ class PlanService:
                 context = await session.get(ContextSnapshot, context_id)
                 context_revision = context.data["project"]["revision"]
             snapshot = dict(
+                conversation_id=conversation.id,
                 tool_id=tool["id"],
                 tool_version=tool["version"],
                 inputs=refs,
@@ -122,6 +145,7 @@ class PlanService:
                 id=plan_id,
                 revision=revision,
                 project_id=project_id,
+                conversation_id=conversation.id,
                 turn_id=turn_id,
                 context_id=context_id,
                 tool_id=tool["id"],
@@ -141,6 +165,7 @@ class PlanService:
                 turn = await session.get(AgentTurn, turn_id)
                 turn.state = "awaiting_execution"
             record_event(session, "plan.created", project_id, plan_id, revision=revision)
+            await touch_conversation(session, conversation.id)
             await session.flush()
             result = row_dict(plan)
             result.update(dimensions=dimensions, tool_name=tool["name"], tool_subtitle=tool["subtitle"])
@@ -168,11 +193,19 @@ class PlanService:
             if latest != request.revision or plan.state != "draft" or plan.plan_hash != request.plan_hash:
                 raise AppError("plan_changed", "方案已改变或执行，请刷新确认。", 409)
             project = await require_project(session, plan.project_id, writable=True)
+            conversation = await resolve_conversation(session, plan.project_id, plan.conversation_id, writable=True)
             planning = await session.scalar(
-                select(AgentTurn).where(AgentTurn.project_id == plan.project_id, AgentTurn.state == "planning").limit(1)
+                select(AgentTurn)
+                .where(AgentTurn.conversation_id == conversation.id, AgentTurn.state == "planning")
+                .limit(1)
             )
             if planning and plan.origin == "agent":
                 raise AppError("planner_busy", "请等待或放弃当前助手规划，再执行这个方案。", 409)
+            active = await session.scalar(
+                select(Task.id).where(Task.conversation_id == conversation.id, Task.state.in_(ACTIVE_TASKS)).limit(1)
+            )
+            if active and plan.origin == "agent":
+                raise AppError("await_feedback", "当前对话已有执行中的任务，请等待完成后继续。", 409)
             if project.revision != plan.project_revision and not request.accept_previous_context:
                 raise AppError("context_stale", "项目背景已修改。请更新方案，或明确采用旧背景。", 409)
             if self.registry.get(plan.tool_id)["availability"] != "available":
@@ -192,6 +225,7 @@ class PlanService:
             task = Task(
                 id=uid(),
                 project_id=plan.project_id,
+                conversation_id=conversation.id,
                 plan_id=plan.id,
                 plan_revision=plan.revision,
                 turn_id=plan.turn_id,
@@ -232,6 +266,7 @@ class PlanService:
             session.add(
                 Message(
                     project_id=plan.project_id,
+                    conversation_id=conversation.id,
                     turn_id=plan.turn_id,
                     role="system",
                     content=f"已提交：{self.registry.get(plan.tool_id)['name']}，{plan.candidate_count}个候选。",
@@ -243,4 +278,5 @@ class PlanService:
                 Idempotency(key=request.idempotency_key, scope="execute", payload_hash=payload_hash, result=result)
             )
             record_event(session, "task.updated", plan.project_id, task.id, state="queued")
+            await touch_conversation(session, conversation.id)
             return result

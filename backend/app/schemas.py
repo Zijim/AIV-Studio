@@ -20,6 +20,21 @@ class ProjectUpdate(StrictModel):
     style: str | None = Field(default=None, max_length=8000)
 
 
+class ConversationCreate(StrictModel):
+    title: str | None = Field(default=None, min_length=1, max_length=120)
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
+
+
+class ConversationRename(StrictModel):
+    title: str = Field(min_length=1, max_length=120)
+    revision: int = Field(ge=1)
+
+
+class ConversationArchive(StrictModel):
+    archived: bool
+    revision: int = Field(ge=1)
+
+
 class InputRef(StrictModel):
     slot: str
     asset_id: str
@@ -32,6 +47,7 @@ class ManualPlan(StrictModel):
     candidate_count: int = Field(default=1, ge=1, le=4)
     change_summary: str = Field(default="", max_length=4000)
     based_on_execution_id: str | None = None
+    conversation_id: str | None = None
 
 
 class PlanPatch(ManualPlan):
@@ -110,6 +126,7 @@ class MessageRequest(StrictModel):
         Literal["auto", "edit_source", "subject_reference", "style_reference", "composition_reference", "first_frame"],
     ] = Field(default_factory=dict, max_length=30)
     idempotency_key: str = Field(min_length=8, max_length=120)
+    conversation_id: str | None = None
 
     @model_validator(mode="after")
     def selected_roles(self):

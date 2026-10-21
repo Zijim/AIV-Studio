@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import {
@@ -54,6 +58,7 @@ import {
   useWorkspace,
 } from "./lib";
 import { Button, Empty, Modal } from "./components/ui";
+import { ConversationSwitcher } from "./components/ConversationSwitcher";
 
 const activeStates = ["queued", "running", "saving"];
 const executeKeys = new Map<string, string>();
@@ -87,8 +92,7 @@ export default function App() {
   const [editingPlan, setEditingPlan] = useState<Data | null>(null);
   const [search, setSearch] = useState(""),
     [filter, setFilter] = useState("");
-  const [trash, setTrash] = useState(false),
-    [message, setMessage] = useState("");
+  const [trash, setTrash] = useState(false);
   const [page, setPage] = useState(0);
   const [busy, setBusy] = useState(""),
     [toast, setToast] = useState("");
@@ -112,6 +116,20 @@ export default function App() {
     refetchInterval: 30000,
   });
   const project = projects.data?.find((p) => p.id === store.projectId);
+  const conversations = useQuery({
+    queryKey: ["conversations", store.projectId],
+    queryFn: () => api(`/projects/${store.projectId}/conversations`),
+    enabled: !!project,
+  });
+  const conversationItems: Data[] = conversations.data?.items ?? [];
+  const conversation = conversationItems.find(
+    (c) => c.id === store.conversationId,
+  );
+  const cid = conversation?.id as string | undefined;
+  const message = cid ? (store.messageDrafts[cid] ?? "") : "";
+  function setMessage(value: string) {
+    if (cid) store.setMessageDraft(cid, value);
+  }
   const assets = useQuery({
     queryKey: ["assets", store.projectId, search, filter, trash, page],
     queryFn: () =>
@@ -120,20 +138,29 @@ export default function App() {
       ),
     enabled: !!project,
   });
-  const messages = useQuery({
-    queryKey: ["messages", store.projectId],
-    queryFn: () => api<Data[]>(`/projects/${store.projectId}/messages`),
-    enabled: !!project,
+  const messages = useInfiniteQuery({
+    queryKey: ["messages", store.projectId, cid],
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      api<Data[]>(
+        `/projects/${store.projectId}/messages?conversation_id=${cid}${pageParam ? `&before=${pageParam}` : ""}`,
+      ),
+    getNextPageParam: (lastPage: Data[]) =>
+      lastPage.length === 100 ? (lastPage[0]?.id as string) : undefined,
+    enabled: !!project && !!cid,
   });
+  const chatMessages = [...(messages.data?.pages ?? [])].reverse().flat();
   const plans = useQuery({
-    queryKey: ["plans", store.projectId],
-    queryFn: () => api<Data[]>(`/projects/${store.projectId}/plans`),
-    enabled: !!project,
+    queryKey: ["plans", store.projectId, cid],
+    queryFn: () =>
+      api<Data[]>(`/projects/${store.projectId}/plans?conversation_id=${cid}`),
+    enabled: !!project && !!cid,
   });
   const turns = useQuery({
-    queryKey: ["turns", store.projectId],
-    queryFn: () => api<Data[]>(`/projects/${store.projectId}/turns`),
-    enabled: !!project,
+    queryKey: ["turns", store.projectId, cid],
+    queryFn: () =>
+      api<Data[]>(`/projects/${store.projectId}/turns?conversation_id=${cid}`),
+    enabled: !!project && !!cid,
     refetchInterval: 4000,
   });
   const planningTurn = turns.data?.find((t) => t.state === "planning");
@@ -157,6 +184,29 @@ export default function App() {
   const running =
     tasks.data?.filter((t) => activeStates.includes(t.state)) ?? [];
   const writable = !!project && !project.archived_at;
+  const conversationWritable =
+    writable && !!conversation && !conversation.archived_at;
+  const conversationRunning = running.filter(
+    (task) => task.conversation_id === cid,
+  );
+
+  function chooseConversation(value: Data) {
+    queryClient.setQueryData(
+      ["conversations", store.projectId],
+      (old: Data | undefined) => ({
+        ...old,
+        items: old?.items?.some((item: Data) => item.id === value.id)
+          ? old.items.map((item: Data) =>
+              item.id === value.id ? { ...item, ...value } : item,
+            )
+          : [value, ...(old?.items ?? [])],
+      }),
+    );
+    store.chooseConversation(value.id);
+    setEditingPlan(null);
+    setModal(null);
+    navigate(`/projects/${store.projectId}?conversation=${value.id}`);
+  }
 
   function refresh() {
     queryClient.invalidateQueries();
@@ -183,6 +233,27 @@ export default function App() {
     const match = location.pathname.match(/^\/projects\/([^/]+)/);
     if (match && match[1] !== store.projectId) store.chooseProject(match[1]);
   }, [location.pathname]);
+  useEffect(() => {
+    if (
+      !project ||
+      !conversations.data ||
+      (location.pathname !== `/projects/${project.id}` &&
+        location.pathname !== "/")
+    )
+      return;
+    const requested = new URLSearchParams(location.search).get("conversation");
+    const value =
+      conversationItems.find((c) => c.id === requested) ??
+      conversationItems.find((c) => c.id === store.conversationId) ??
+      conversationItems.find((c) => !c.archived_at) ??
+      conversationItems[0];
+    if (!value) return;
+    if (store.conversationId !== value.id) store.chooseConversation(value.id);
+    if (requested !== value.id)
+      navigate(`/projects/${project.id}?conversation=${value.id}`, {
+        replace: true,
+      });
+  }, [project?.id, conversations.data, location.search, location.pathname]);
   useEffect(() => {
     setFocus(null);
     setTrash(false);
@@ -217,6 +288,8 @@ export default function App() {
             if (
               asset.role === "final" &&
               asset.presence === "available" &&
+              asset.conversation_id ===
+                useWorkspace.getState().conversationId &&
               update.project_id === useWorkspace.getState().projectId
             ) {
               asset.project = asset.projects.find(
@@ -230,14 +303,16 @@ export default function App() {
           .catch(() => {});
       }
       const keys = type.startsWith("task.")
-        ? ["tasks", "turns"]
+        ? ["tasks", "turns", "conversations"]
         : type.startsWith("plan.")
-          ? ["plans"]
+          ? ["plans", "conversations"]
           : type.startsWith("message.") || type.startsWith("turn.")
-            ? ["messages", "plans", "turns"]
-            : type.startsWith("project.")
-              ? ["projects", "assets"]
-              : ["assets", "detail"];
+            ? ["messages", "plans", "turns", "conversations"]
+            : type.startsWith("conversation.")
+              ? ["conversations"]
+              : type.startsWith("project.")
+                ? ["projects", "assets"]
+                : ["assets", "detail"];
       keys.forEach((key) => queryClient.invalidateQueries({ queryKey: [key] }));
     };
     return () => source.close();
@@ -249,7 +324,7 @@ export default function App() {
   }, [toast]);
   useEffect(() => {
     chatEnd.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.data?.length, draft?.revision]);
+  }, [cid, chatMessages.at(-1)?.id, draft?.revision]);
   useEffect(() => {
     if (focus) {
       const fresh = allAssets.find((a) => a.id === focus.id);
@@ -313,6 +388,14 @@ export default function App() {
   async function send(event: FormEvent) {
     event.preventDefault();
     if (
+      !cid ||
+      !conversationWritable ||
+      planningTurn ||
+      conversationRunning.length
+    )
+      return;
+    const targetConversation = cid;
+    if (
       store.selected.length &&
       (selectedAssets.isPending || selectedAssets.isError)
     ) {
@@ -335,6 +418,7 @@ export default function App() {
     await action("message", async () => {
       await api(`/projects/${project!.id}/messages`, "POST", {
         content: parsed.data,
+        conversation_id: targetConversation,
         selected_asset_ids: store.selected,
         image_roles: Object.fromEntries(
           Object.entries(store.imageRoles).filter(([id]) =>
@@ -343,7 +427,7 @@ export default function App() {
         ),
         idempotency_key: crypto.randomUUID(),
       });
-      setMessage("");
+      store.setMessageDraft(targetConversation, "");
     });
   }
 
@@ -757,7 +841,9 @@ export default function App() {
             {tools.data?.map((t) => (
               <button
                 key={t.id}
-                disabled={!writable || t.availability !== "available"}
+                disabled={
+                  !conversationWritable || t.availability !== "available"
+                }
                 title={t.issues?.join("；") || t.subtitle}
                 onClick={() => openTool(t)}
               >
@@ -786,13 +872,44 @@ export default function App() {
               {busy === "message" || planningTurn ? "思考中" : "单步创作"}
             </span>
           </div>
+          <ConversationSwitcher
+            projectId={store.projectId}
+            items={conversationItems}
+            current={conversation}
+            limits={conversations.data?.context_limits}
+            writable={writable}
+            onChoose={chooseConversation}
+            onRefresh={refresh}
+            onError={setToast}
+          />
           <div className="conversation">
-            {!messages.data?.length && (
+            {(conversations.isError || messages.isError) && (
+              <Empty icon={<MessageSquare />} title="对话暂时无法加载">
+                <Button
+                  onClick={() => {
+                    conversations.refetch();
+                    messages.refetch();
+                  }}
+                >
+                  重新加载
+                </Button>
+              </Empty>
+            )}
+            {messages.hasNextPage && (
+              <Button
+                className="load-earlier-messages"
+                disabled={messages.isFetchingNextPage}
+                onClick={() => messages.fetchNextPage()}
+              >
+                {messages.isFetchingNextPage ? "正在加载…" : "加载更早的消息"}
+              </Button>
+            )}
+            {conversation && !chatMessages.length && !messages.isPending && (
               <div className="assistant-intro">
                 <span className="eyebrow">一起把想法往前推进</span>
                 <h3>我会为你准备创作方案。</h3>
                 <p>
-                  告诉我你想要的画面、风格，或希望对当前素材做什么调整。确认方案后开始生成。
+                  这是一个独立的对话。告诉我你想要的画面、风格，或选择项目素材继续打磨；其他对话的聊天记录不会带入。
                 </p>
                 <div className="suggestions">
                   {[
@@ -802,7 +919,7 @@ export default function App() {
                   ].map((text) => (
                     <button
                       key={text}
-                      disabled={!writable}
+                      disabled={!conversationWritable}
                       onClick={() => setMessage(text)}
                     >
                       {text}
@@ -812,7 +929,7 @@ export default function App() {
                 </div>
               </div>
             )}
-            {messages.data?.map((m) => (
+            {chatMessages.map((m) => (
               <div key={m.id} className={`chat-message ${m.role}`}>
                 <span className="message-role">
                   {m.role === "user"
@@ -953,7 +1070,11 @@ export default function App() {
                   </Button>
                   <Button
                     variant="primary"
-                    disabled={!writable || !!busy}
+                    disabled={
+                      !conversationWritable ||
+                      !!busy ||
+                      !!conversationRunning.length
+                    }
                     onClick={() => execute(draft)}
                   >
                     <Play size={14} />
@@ -1038,8 +1159,8 @@ export default function App() {
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               disabled={
-                !writable ||
-                !!running.length ||
+                !conversationWritable ||
+                !!conversationRunning.length ||
                 !!planningTurn ||
                 busy === "message"
               }
@@ -1061,21 +1182,23 @@ export default function App() {
             )}
             <div className="composer-footer">
               <span>
-                {running.length
+                {conversationRunning.length
                   ? "等待本次结果，再继续打磨"
                   : project?.archived_at
                     ? "项目已归档，解除归档后继续"
-                    : "确认后执行 · 完成后等待你的反馈"}
+                    : conversation?.archived_at
+                      ? "对话已归档，恢复后继续"
+                      : "确认后执行 · 完成后等待你的反馈"}
               </span>
               <Button
                 variant="primary"
                 type="submit"
                 aria-label="发送"
                 disabled={
-                  !writable ||
+                  !conversationWritable ||
                   !!planningTurn ||
                   !!busy ||
-                  !!running.length ||
+                  !!conversationRunning.length ||
                   imageCount > visionLimit ||
                   (!!store.selected.length &&
                     (selectedAssets.isPending || selectedAssets.isError)) ||
@@ -1139,6 +1262,24 @@ export default function App() {
                   </small>
                 </div>
                 <span className="task-label">{labels[t.state]}</span>
+                {t.conversation_id && (
+                  <button
+                    className="task-conversation-link"
+                    onClick={() => {
+                      const target = conversationItems.find(
+                        (c) => c.id === t.conversation_id,
+                      );
+                      if (target) {
+                        chooseConversation(target);
+                        store.setTaskOpen(false);
+                      }
+                    }}
+                    title="返回任务所属对话"
+                  >
+                    {conversationItems.find((c) => c.id === t.conversation_id)
+                      ?.title ?? "所属对话"}
+                  </button>
+                )}
                 <div className="task-progress">
                   {t.executions.find(
                     (e: Data) => !TERMINAL_UI.includes(e.execution_state),
@@ -1219,6 +1360,7 @@ export default function App() {
                   editingPlan ? "PATCH" : "POST",
                   {
                     ...body,
+                    conversation_id: editingPlan?.conversation_id ?? cid,
                     ...(editingPlan ? { revision: editingPlan.revision } : {}),
                   },
                 );
@@ -1316,6 +1458,10 @@ export default function App() {
           onClose={() => setModal(null)}
           action={action}
           onPlan={(p) => {
+            const owner = conversationItems.find(
+              (c) => c.id === p.conversation_id,
+            );
+            if (owner) chooseConversation(owner);
             refresh();
             setModal(null);
             setToast("重做方案已准备，请确认执行");

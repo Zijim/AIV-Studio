@@ -46,10 +46,19 @@ export const messageSchema = z
 export const useWorkspace = create(
   persist<{
     projectId: string;
+    conversationId: string;
+    conversationsByProject: Record<string, string>;
+    messageDrafts: Record<string, string>;
+    conversationInputs: Record<
+      string,
+      { selected: string[]; imageRoles: Record<string, string> }
+    >;
     selected: string[];
     imageRoles: Record<string, string>;
     taskOpen: boolean;
     chooseProject: (id: string) => void;
+    chooseConversation: (id: string) => void;
+    setMessageDraft: (id: string, value: string) => void;
     chooseAsset: (id: string, additive?: boolean) => void;
     setImageRole: (id: string, role: string) => void;
     clear: () => void;
@@ -57,11 +66,61 @@ export const useWorkspace = create(
   }>(
     (set) => ({
       projectId: "",
+      conversationId: "",
+      conversationsByProject: {},
+      messageDrafts: {},
+      conversationInputs: {},
       selected: [],
       imageRoles: {},
       taskOpen: false,
       chooseProject: (id) =>
-        set({ projectId: id, selected: [], imageRoles: {} }),
+        set((s) => {
+          const inputs = {
+            ...s.conversationInputs,
+            ...(s.conversationId
+              ? {
+                  [s.conversationId]: {
+                    selected: s.selected,
+                    imageRoles: s.imageRoles,
+                  },
+                }
+              : {}),
+          };
+          const cid = s.conversationsByProject[id] ?? "";
+          return {
+            projectId: id,
+            conversationId: cid,
+            conversationInputs: inputs,
+            selected: inputs[cid]?.selected ?? [],
+            imageRoles: inputs[cid]?.imageRoles ?? {},
+          };
+        }),
+      chooseConversation: (id) =>
+        set((s) => {
+          const inputs = {
+            ...s.conversationInputs,
+            ...(s.conversationId
+              ? {
+                  [s.conversationId]: {
+                    selected: s.selected,
+                    imageRoles: s.imageRoles,
+                  },
+                }
+              : {}),
+          };
+          return {
+            conversationId: id,
+            conversationsByProject: {
+              ...s.conversationsByProject,
+              [s.projectId]: id,
+            },
+            conversationInputs: inputs,
+            selected: inputs[id]?.selected ?? [],
+            imageRoles: inputs[id]?.imageRoles ?? {},
+          };
+        }),
+      setMessageDraft: (id, value) =>
+        set((s) => ({ messageDrafts: { ...s.messageDrafts, [id]: value } })),
       chooseAsset: (id, additive) =>
         set((s) => {
           const selected = additive
@@ -97,7 +156,20 @@ export const useWorkspace = create(
     }),
     {
       name: "aiv-workspace",
-      partialize: (s) => ({ ...s, selected: [], imageRoles: {} }),
+      partialize: (s) => ({
+        ...s,
+        conversationInputs: {
+          ...s.conversationInputs,
+          ...(s.conversationId
+            ? {
+                [s.conversationId]: {
+                  selected: s.selected,
+                  imageRoles: s.imageRoles,
+                },
+              }
+            : {}),
+        },
+      }),
     },
   ),
 );

@@ -196,7 +196,9 @@ flowchart LR
 
 ### 5.3 忙碌、归档与选择
 
-同一项目最多一个正在准备/执行/保存的助手回合。此时新创作诉求返回 busy，显示等待或取消，保留未发送草稿；不得把它记成已受理的创作请求。仍允许浏览、备注、标记和明确的手动工具排队。尚未执行的 awaiting_execution 方案允许用户继续用中文修改，修改关联原回合并产生新方案版本；明确开启其他目标时放弃旧草案再创建回合，不静默执行旧草案。needs_clarification 状态的回答关联原回合。
+同一对话最多一个正在准备/执行/保存的助手回合。此时该对话的新创作诉求返回 busy，显示等待或取消，保留未发送草稿；不得把它记成已受理的创作请求。同项目其他对话仍可独立讨论、准备方案和排队，ComfyUI继续按全局队列串行执行。仍允许浏览、备注、标记和明确的手动工具排队。尚未执行的 awaiting_execution 方案允许用户继续用中文修改，修改关联原回合并产生新方案版本；明确开启其他目标时放弃该对话的旧草案再创建回合，不影响其他对话的草案。needs_clarification 状态的回答关联原回合和所属对话。
+
+助手顶部提供新建对话和对话列表，支持搜索、切换、重命名、归档与恢复；首次请求可自动生成名称。对话有稳定URL，记住各项目最近访问的对话，未发送草稿、图片选择和用途随对话保存，刷新后恢复。归档对话可只读浏览，恢复后继续；活动回合或任务结束前不允许归档。任务列表能返回所属对话，结果消息只进入发起对话。旧项目迁入默认对话，历史及已有摘要保留，迁移前自动备份。
 
 不同项目和手动任务共用全局队列。归档保留浏览、搜索、素材复用；归档项目不能提交新创作，须先解除归档。当前有活动任务时不允许归档该项目。
 
@@ -214,9 +216,9 @@ flowchart LR
 
 ### 6.2 上下文
 
-后台创建不可变 context snapshot，包括当前项目目标/风格及 revision、当前用户诉求、明确选择、可用工具、相关素材身份/类型/尺寸/备注、最近完成任务的实际输入/参数和近期对话。
+后台创建不可变 context snapshot，包括当前项目目标/风格及 revision、当前对话身份、当前用户诉求、明确选择、可用工具、相关素材身份/类型/尺寸/备注，以及本对话最近完成任务的实际输入/参数、待确认方案和近期消息。项目目标、风格与素材库共享；对话历史、摘要边界、回合和草案按conversation_id隔离。其他对话生成的素材和来源参数只有在用户明确选择或以素材链接引用时才纳入本轮；不能通过“最近执行”或素材备注间接引入其他对话记忆。
 
-输入上限默认128K tokens，达到96K时整理较早对话；不固定限制消息条数或截断每条消息。整理时按token预算保留约24K的近期完整消息，至少保留最近两条，其余较早内容与已有摘要合并。摘要按项目持久保存覆盖边界、版本和消息数量，原始消息不删除；后续只处理边界后的新增历史。每批摘要输入最多64K、输出最多4K，每轮最多4批，调用与规划共用费用预算，失败不静默丢弃历史。相关素材最多30个明确选择，不向模型发送完整素材库。直接关联上一次执行和用户明确指定素材；必要背景、当前需求、草案、明确选择与来源参数仍超限时提示用户缩短输入或减少选择。
+每个对话独立使用默认128K tokens输入上限，达到96K时整理较早对话；不固定限制消息条数或截断每条消息。整理时按token预算保留约24K的近期完整消息，至少保留最近两条，其余较早内容与已有摘要合并。摘要按对话持久保存覆盖边界、版本和消息数量，原始消息不删除；后续只处理边界后的新增历史。每批摘要输入最多64K、输出最多4K，每轮最多4批，调用与规划共用费用预算，失败不静默丢弃历史。新对话从空白历史及摘要开始，工作台每日费用预算继续共享。相关素材最多30个明确选择，不向模型发送完整素材库。直接关联本对话上一次执行和用户明确指定素材；必要背景、当前需求、草案、明确选择与来源参数仍超限时提示用户缩短输入或减少选择。
 
 不依赖云端 conversation 作为唯一历史，不使用未落盘的 previous_response_id 维护项目上下文。对话、计划、执行与素材身份由本地数据库保存。
 
@@ -228,7 +230,7 @@ flowchart LR
 
 图片预算按官方每图1024 tokens上限独立预留，和文字预算一起参与上下文压缩、调用费用预留与修复次数限制。base64不参与文本分词，也不写入上下文快照或调用审计日志；日志保留本地素材身份及副本hash，副本仅驻留当轮内存。当前视频工具只接受实际首帧，用户明确标注的主体/风格/构图参考不能直接被该工具用作首帧；需要新开场画面时先澄清或准备单步首帧图片方案。
 
-引用规则：明确指定资产/本轮明确指代优先；“选中的这张”要求当前选择唯一；“刚才那张/上一步”要求当前项目有唯一、已交付且相关的结果。最佳标记仅在用户明确提及或其明确选择时使用；多候选不能任意选第一张。跨项目引用必须先由用户明确复用到当前项目或明确指定可访问资产。缺失、移除或歧义返回澄清。
+引用规则：明确指定资产/本轮明确指代优先；“选中的这张”要求当前选择唯一；“刚才那张/上一步”要求当前对话有唯一、已交付且相关的结果。最佳标记仅在用户明确提及或其明确选择时使用；多候选不能任意选第一张。跨项目引用必须先由用户明确复用到当前项目或明确指定可访问资产。缺失、移除或歧义返回澄清。
 
 ### 6.3 结构化输出
 
@@ -435,13 +437,13 @@ ComfyUI 自身保证服务器执行串行；应用不能独占其队列。调度
 | 实体 | 关键字段与关系 |
 | --- | --- |
 | projects | name、goal、style、revision、archived_at、created_at |
-| conversations | project_id、title；首版项目默认一条主对话，结构允许以后增加 |
+| conversations | project_id、title、is_default、auto_title、revision、archived_at、created_at、updated_at；每项目一个默认对话，可新建多个独立对话 |
 | messages | conversation_id、turn_id、role、content、plan/task链接；真实受理状态 |
-| agent_turns | project_id、user_message_id、state、provider/model、调用计数、预算 |
-| context_snapshots | project_id/revision、选中项/相关素材、消息范围、实际背景 JSON |
-| plans | plan_id、revision、context_snapshot_id、规范化操作JSON、hash、state、origin |
+| agent_turns | project_id、conversation_id、user_message_id、state、provider/model、调用计数、预算 |
+| context_snapshots | project_id/revision、conversation_id、选中项/相关素材、消息范围、实际背景 JSON |
+| plans | plan_id、revision、conversation_id、context_snapshot_id、规范化操作JSON、hash、state、origin |
 | tool_versions | tool_id/version、manifest、template/source hash、availability、固定文件路径 |
-| tasks | project_id、plan/revision、origin、queue_seq、candidate_group_id、state、retry_of_task_id |
+| tasks | project_id、conversation_id、plan/revision、origin、queue_seq、candidate_group_id、state、retry_of_task_id |
 | executions | task_id、candidate_index、prompt_id、client_id、tool_version、实际seed/参数、execution/storage_state、时间、错误 |
 | execution_inputs | execution_id、slot、asset_id、blob_id、输入hash；冻结引用 |
 | artifacts | execution_id、node_id、field、item_index、role、Comfy引用、保存状态、asset_id、representation_of |
@@ -547,7 +549,11 @@ unknown 是长期记录状态；在确认服务器没有该执行且当前队列
 | GET /health、GET /capabilities | 应用、ComfyUI、LLM配置与工具可用性 |
 | GET/POST /projects；GET/PATCH /projects/{id} | 列表、创建、详情、背景更新 |
 | POST /projects/{id}/archive、/unarchive | 归档/解除归档 |
-| GET /projects/{id}/messages；POST /projects/{id}/messages | 对话历史、启动方案回合；幂等key必需 |
+| GET/POST /projects/{id}/conversations | 对话列表、状态及上下文预算；创建独立对话，支持幂等key |
+| PATCH /projects/{id}/conversations/{conversation_id} | 重命名，revision保护并发 |
+| POST /projects/{id}/conversations/{conversation_id}/archive | 归档/恢复，archived布尔值及revision |
+| GET /projects/{id}/messages；POST /projects/{id}/messages | 按conversation_id读取历史/启动方案回合；发送幂等key必需；历史支持before消息游标 |
+| GET /projects/{id}/turns；GET /projects/{id}/plans | 按conversation_id读取回合与方案，不能混合其他对话 |
 | POST /turns/{id}/clarifications；POST /turns/{id}/abandon | 回答澄清/放弃尚未执行方案 |
 | GET /plans/{id}；PATCH /plans/{id} | 读取/修改，修改产生新revision，If-Match保护并发 |
 | POST /plans/{id}/execute | revision/hash/key确认，返回task |
@@ -570,9 +576,9 @@ unknown 是长期记录状态；在确认服务器没有该执行且当前队列
 | POST /backups；GET /backups/{id} | 显式一致备份 |
 | GET /events | SSE，按project/task过滤，支持Last-Event-ID |
 
-分页统一 `items / next_cursor`；正常列表默认50、最大200。revision冲突、忙碌、工具不可用、预算不足均返回可读业务错误，不假装接受任务。
+普通列表采用 `items / next_cursor`，正常列表默认50、最大200；消息接口兼容已有数组响应，默认100、最多300条，以before消息ID向前加载，界面提供“加载更早的消息”。消息、回合和方案接口省略conversation_id时只访问项目默认对话，保留旧集成兼容性；指定时校验项目归属。revision冲突、忙碌、工具不可用、预算不足均返回可读业务错误，不假装接受任务。
 
-SSE事件包括 `turn.updated / plan.created / task.updated / execution.progress / artifact.pending / asset.saved / asset.missing / project.updated / resource.updated`。事件带全局递增id、实体revision与引用；重要状态在事务中写events，commit后发送。progress最多每秒一次持久推送，原始高频事件可留执行日志。
+SSE事件包括 `conversation.updated / turn.updated / plan.created / task.updated / execution.progress / artifact.pending / asset.saved / asset.missing / project.updated / resource.updated`。事件带全局递增id、实体revision与引用；重要状态在事务中写events，commit后发送。progress最多每秒一次持久推送，原始高频事件可留执行日志。
 
 事件保留默认7天且最多100000条；超出重放范围返回reset事件，前端重新拉取状态。重放不触发副作用。每15秒SSE心跳，前端重连显示连接状态，页面刷新不改变任务。
 

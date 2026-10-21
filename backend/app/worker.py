@@ -9,6 +9,7 @@ import httpx
 from sqlalchemy import delete, func, select
 
 from .comfy import file_references
+from .conversations import touch_conversation
 from .errors import AppError
 from .models import (
     AgentTurn,
@@ -645,6 +646,7 @@ class Worker:
                     session.add(
                         Message(
                             project_id=task.project_id,
+                            conversation_id=task.conversation_id,
                             turn_id=task.turn_id,
                             role="assistant",
                             content=content,
@@ -652,6 +654,7 @@ class Worker:
                         )
                     )
                     record_event(session, "message.created", task.project_id, task_id)
+                    await touch_conversation(session, task.conversation_id)
 
     async def idle_free(self):
         if self.freed or not self.last_own_finish or self.settings.auto_free_after_idle_seconds <= 0:

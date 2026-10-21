@@ -9,7 +9,7 @@ from sqlalchemy import select, text
 
 from .errors import AppError
 from .media import inspect_file
-from .models import Asset, AssetRelation, Blob, ProjectAsset, record_event, row_dict, uid
+from .models import Asset, AssetRelation, Blob, Execution, ProjectAsset, Task, record_event, row_dict, uid
 
 
 def file_hash(path):
@@ -263,6 +263,15 @@ class Storage:
     async def asset_view(self, session, asset, membership=None):
         blob = await session.get(Blob, asset.blob_id)
         result = row_dict(asset)
+        result["conversation_id"] = (
+            await session.scalar(
+                select(Task.conversation_id)
+                .join(Execution, Execution.task_id == Task.id)
+                .where(Execution.id == asset.execution_id)
+            )
+            if asset.execution_id
+            else None
+        )
         path = self.resolve(blob.relative_path)
         available = blob.presence == "available" and path.is_file()
         result.update(

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -30,6 +30,21 @@ class Project(Entity, Base):
     revision: Mapped[int] = mapped_column(default=1)
     archived_at: Mapped[str | None]
     removed_at: Mapped[str | None]
+    updated_at: Mapped[str] = mapped_column(default=now)
+
+
+class Conversation(Entity, Base):
+    __tablename__ = "conversations"
+    __table_args__ = (
+        Index("ix_conversations_project", "project_id", "updated_at"),
+        Index("uq_default_conversation", "project_id", unique=True, sqlite_where=text("is_default = 1")),
+    )
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
+    title: Mapped[str] = mapped_column(String(120), default="新对话")
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    auto_title: Mapped[bool] = mapped_column(Boolean, default=True)
+    revision: Mapped[int] = mapped_column(default=1)
+    archived_at: Mapped[str | None]
     updated_at: Mapped[str] = mapped_column(default=now)
 
 
@@ -76,12 +91,14 @@ class ProjectAsset(Base):
 class ContextSnapshot(Entity, Base):
     __tablename__ = "context_snapshots"
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
+    conversation_id: Mapped[str | None] = mapped_column(ForeignKey("conversations.id"), index=True)
     data: Mapped[dict] = mapped_column(JSON)
 
 
 class AgentTurn(Entity, Base):
     __tablename__ = "agent_turns"
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
+    conversation_id: Mapped[str | None] = mapped_column(ForeignKey("conversations.id"), index=True)
     state: Mapped[str] = mapped_column(default="planning")
     call_count: Mapped[int] = mapped_column(default=0)
     error: Mapped[dict | None] = mapped_column(JSON)
@@ -91,6 +108,8 @@ class AgentTurn(Entity, Base):
 class Message(Entity, Base):
     __tablename__ = "messages"
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
+    conversation_id: Mapped[str | None] = mapped_column(ForeignKey("conversations.id"), index=True)
+    __table_args__ = (Index("ix_messages_conversation_history", "conversation_id", "created_at", "id"),)
     turn_id: Mapped[str | None] = mapped_column(ForeignKey("agent_turns.id"))
     role: Mapped[str]
     content: Mapped[str] = mapped_column(Text)
@@ -104,6 +123,7 @@ class Plan(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     revision: Mapped[int] = mapped_column(Integer, primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
+    conversation_id: Mapped[str | None] = mapped_column(ForeignKey("conversations.id"), index=True)
     turn_id: Mapped[str | None] = mapped_column(ForeignKey("agent_turns.id"))
     context_id: Mapped[str | None] = mapped_column(ForeignKey("context_snapshots.id"))
     tool_id: Mapped[str]
@@ -124,6 +144,7 @@ class Plan(Base):
 class Task(Entity, Base):
     __tablename__ = "tasks"
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
+    conversation_id: Mapped[str | None] = mapped_column(ForeignKey("conversations.id"), index=True)
     plan_id: Mapped[str]
     plan_revision: Mapped[int]
     turn_id: Mapped[str | None] = mapped_column(ForeignKey("agent_turns.id"))

@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 
 from . import api
+from .conversations import resolve_conversation
 from .errors import AppError
 from .models import AgentTurn, LLMCall, Plan, record_event, row_dict
 from .plans import require_project
@@ -26,7 +27,8 @@ async def capabilities(request: Request):
             "provider": "deepseek_official_responses",
             "structured_output": True,
             "max_calls_per_turn": 2,
-            "vision": False,
+            "vision": True,
+            "multiple_conversations": True,
         },
     }
 
@@ -40,15 +42,16 @@ async def tool(request: Request, tool_id: str):
 
 
 @router.get("/projects/{project_id}/turns")
-async def turns(request: Request, project_id: str):
-    async with request.app.state.db.session() as s:
+async def turns(request: Request, project_id: str, conversation_id: str | None = None):
+    async with request.app.state.db.transaction() as s:
         await require_project(s, project_id)
+        conversation = await resolve_conversation(s, project_id, conversation_id)
         return [
             row_dict(t)
             for t in (
                 await s.scalars(
                     select(AgentTurn)
-                    .where(AgentTurn.project_id == project_id)
+                    .where(AgentTurn.project_id == project_id, AgentTurn.conversation_id == conversation.id)
                     .order_by(AgentTurn.created_at.desc())
                     .limit(30)
                 )
@@ -68,6 +71,9 @@ async def turn(request: Request, turn_id: str):
 @router.post("/turns/{turn_id}/clarifications", status_code=202)
 async def clarify(request: Request, turn_id: str, body: MessageRequest):
     t = await turn(request, turn_id)
+    if body.conversation_id and body.conversation_id != t["conversation_id"]:
+        raise AppError("conversation_mismatch", "澄清必须留在原来的对话中。", 409)
+    body = body.model_copy(update={"conversation_id": t["conversation_id"]})
     return await api.send_message(request, t["project_id"], body)
 
 

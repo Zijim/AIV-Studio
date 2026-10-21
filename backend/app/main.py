@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from .api import router
 from .comfy import ComfyClient
 from .config import ROOT, load_settings
+from .conversation_api import router as conversation_router
 from .db import Database
 from .errors import AppError
 from .extensions import router as extension_router
@@ -111,6 +112,7 @@ async def lifespan(app):
 
 app = FastAPI(title="映作 · AIV Studio", version="0.1.0", lifespan=lifespan)
 app.include_router(router)
+app.include_router(conversation_router)
 app.include_router(extension_router)
 
 
