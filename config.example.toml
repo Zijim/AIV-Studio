@@ -19,6 +19,9 @@ max_input_tokens = 131072
 history_summary_threshold_tokens = 98304
 history_recent_tokens = 24576
 max_output_tokens = 8192
+# 每轮只发送明确选中的图片，原文件和ComfyUI输入保持原尺寸
+vision_max_images = 6
+vision_max_edge = 1536
 timeout_seconds = 60
 turn_budget_usd = 0.15
 daily_budget_usd = 0.50

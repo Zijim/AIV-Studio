@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class StrictModel(BaseModel):
@@ -105,4 +105,18 @@ class AssetNote(StrictModel):
 class MessageRequest(StrictModel):
     content: str = Field(min_length=1, max_length=16000)
     selected_asset_ids: list[str] = Field(default_factory=list, max_length=30)
+    image_roles: dict[
+        str,
+        Literal["auto", "edit_source", "subject_reference", "style_reference", "composition_reference", "first_frame"],
+    ] = Field(default_factory=dict, max_length=30)
     idempotency_key: str = Field(min_length=8, max_length=120)
+
+    @model_validator(mode="after")
+    def selected_roles(self):
+        if len(set(self.selected_asset_ids)) != len(self.selected_asset_ids):
+            raise ValueError("所选素材不能重复")
+        if not self.image_roles.keys() <= set(self.selected_asset_ids):
+            raise ValueError("图片用途只能设置给本轮选中的素材")
+        if sum(role == "first_frame" for role in self.image_roles.values()) > 1:
+            raise ValueError("一次只能指定一张视频首帧")
+        return self

@@ -47,29 +47,58 @@ export const useWorkspace = create(
   persist<{
     projectId: string;
     selected: string[];
+    imageRoles: Record<string, string>;
     taskOpen: boolean;
     chooseProject: (id: string) => void;
     chooseAsset: (id: string, additive?: boolean) => void;
+    setImageRole: (id: string, role: string) => void;
     clear: () => void;
     setTaskOpen: (value: boolean) => void;
   }>(
     (set) => ({
       projectId: "",
       selected: [],
+      imageRoles: {},
       taskOpen: false,
-      chooseProject: (id) => set({ projectId: id, selected: [] }),
+      chooseProject: (id) =>
+        set({ projectId: id, selected: [], imageRoles: {} }),
       chooseAsset: (id, additive) =>
-        set((s) => ({
-          selected: additive
+        set((s) => {
+          const selected = additive
             ? s.selected.includes(id)
               ? s.selected.filter((x) => x !== id)
               : [...s.selected, id]
-            : [id],
+            : [id];
+          return {
+            selected,
+            imageRoles: Object.fromEntries(
+              Object.entries(s.imageRoles).filter(([key]) =>
+                selected.includes(key),
+              ),
+            ),
+          };
+        }),
+      setImageRole: (id, role) =>
+        set((s) => ({
+          imageRoles: {
+            ...Object.fromEntries(
+              Object.entries(s.imageRoles).map(([key, value]) => [
+                key,
+                role === "first_frame" && value === "first_frame"
+                  ? "auto"
+                  : value,
+              ]),
+            ),
+            [id]: role,
+          },
         })),
-      clear: () => set({ selected: [] }),
+      clear: () => set({ selected: [], imageRoles: {} }),
       setTaskOpen: (value) => set({ taskOpen: value }),
     }),
-    { name: "aiv-workspace", partialize: (s) => ({ ...s, selected: [] }) },
+    {
+      name: "aiv-workspace",
+      partialize: (s) => ({ ...s, selected: [], imageRoles: {} }),
+    },
   ),
 );
 export const bytes = (n: number) =>

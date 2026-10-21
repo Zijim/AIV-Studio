@@ -67,7 +67,7 @@ React/Vite 的选择与本机 Node 24 相容，构建要求见 [Vite 官方说�
 
 通过 `AsyncOpenAI(api_key=deepseek_key, base_url=deepseek_base_url, max_retries=0)` 作为兼容HTTP客户端，调用 `client.responses.create`。`text.format` 使用 `type=json_schema`、schema名称与 Pydantic 生成的JSON Schema；返回内容再经 `PlannerResult.model_validate_json` 和后台语义校验。SDK名称不改变供应商，请求只发往配置的DeepSeek官方地址；不要求OpenAI API Key。[DeepSeek Responses调用与兼容说明](https://api-docs.deepseek.com/guides/responses_api/)、[请求字段](https://api-docs.deepseek.com/api/create-response/)
 
-默认请求参数：`reasoning.effort=low`、`max_output_tokens=8192`、60 秒客户端超时。仅发送DeepSeek明确支持的字段；不发送`store`、`previous_response_id`、`conversation`、`background`等不支持的状态管理参数。DeepSeek Responses是无状态接口，每次发送本地组织的必要历史。只发送本产品准备的文本上下文，不启用供应商在线搜索、代码执行或远程MCP，首版不上传图片/视频给语言模型。
+默认请求参数：`reasoning.effort=low`、`max_output_tokens=8192`、60 秒客户端超时。仅发送DeepSeek明确支持的字段；不发送`store`、`previous_response_id`、`conversation`、`background`等不支持的状态管理参数。DeepSeek Responses是无状态接口，每次发送本地组织的必要历史。不启用供应商在线搜索、代码执行或远程MCP；图片输入按6.2节组织，暂不上传视频连续帧。
 
 `deepseek-flash` 是官方模型别名，不能按固定快照保证后端版本不变。每次调用保存请求模型ID、响应model、当时文档标注的模型版本与记录时间，以及供应商返回的可得版本信息；官方更新别名指向后记录变化，不自动声称仍是同一快照。
 
@@ -219,6 +219,14 @@ flowchart LR
 输入上限默认128K tokens，达到96K时整理较早对话；不固定限制消息条数或截断每条消息。整理时按token预算保留约24K的近期完整消息，至少保留最近两条，其余较早内容与已有摘要合并。摘要按项目持久保存覆盖边界、版本和消息数量，原始消息不删除；后续只处理边界后的新增历史。每批摘要输入最多64K、输出最多4K，每轮最多4批，调用与规划共用费用预算，失败不静默丢弃历史。相关素材最多30个明确选择，不向模型发送完整素材库。直接关联上一次执行和用户明确指定素材；必要背景、当前需求、草案、明确选择与来源参数仍超限时提示用户缩短输入或减少选择。
 
 不依赖云端 conversation 作为唯一历史，不使用未落盘的 previous_response_id 维护项目上下文。对话、计划、执行与素材身份由本地数据库保存。
+
+2026-10-21读图补充：每轮只将用户明确选中或在本轮消息中以本工作台素材链接引用的图片，通过 Responses API 的 `user.content` 中 `input_image`（base64 data URL）发送至 DeepSeek，图前附 `asset_id` 与用途标签，支持多图比较。默认上限6张、读图副本最长边1536，校正EXIF方向且不放大，透明底按白色合成，动画只取首帧；原文件和工作流输入保持不变。视频当前只提供文件元信息。缺失、无法解码或超过5000万像素的图片必须报告错误，不能静默降级成文字猜图。
+
+本工作台链接限定 `127.0.0.1` / `localhost`、配置的服务端口或Vite代理端口5173，及相对路径 `/api/v1/assets/<UUID>/preview|content`。后台解析当前消息中的asset_id，从本地素材库读取原图，并校验当前项目引用、移除状态和原文件存在性；不让供应商访问本机网址，不下载任意外部URL，也不从历史消息推断新附图。选择与链接取并集去重，共用30份素材/默认6张图片及费用限制。上下文记录引用来源，用户消息详情保留明确选择、链接引用和实际附图清单。
+
+`MessageRequest.image_roles` 为本轮所选图片到用途的映射，取 `auto / edit_source / subject_reference / style_reference / composition_reference / first_frame`，默认auto；一次最多明确指定一张视频首帧。模型输出 `visual_observations[]`，每项含 `asset_id / observation / uncertainties`，必须与本轮附图一一对应，纯文字请求为空。后台校验身份后补入原文件hash、发送尺寸、用途、模型和时间，保存于助手 `Message.details`，与用户需求和生成提示词分开；历史整理保留必要的身份和不确定性。
+
+图片预算按官方每图1024 tokens上限独立预留，和文字预算一起参与上下文压缩、调用费用预留与修复次数限制。base64不参与文本分词，也不写入上下文快照或调用审计日志；日志保留本地素材身份及副本hash，副本仅驻留当轮内存。当前视频工具只接受实际首帧，用户明确标注的主体/风格/构图参考不能直接被该工具用作首帧；需要新开场画面时先澄清或准备单步首帧图片方案。
 
 引用规则：明确指定资产/本轮明确指代优先；“选中的这张”要求当前选择唯一；“刚才那张/上一步”要求当前项目有唯一、已交付且相关的结果。最佳标记仅在用户明确提及或其明确选择时使用；多候选不能任意选第一张。跨项目引用必须先由用户明确复用到当前项目或明确指定可访问资产。缺失、移除或歧义返回澄清。
 

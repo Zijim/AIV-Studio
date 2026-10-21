@@ -69,7 +69,12 @@ async def health(request: Request):
         "data_dir": str(state.settings.data_dir),
         "process_id": os.getpid(),
         "comfyui": state.worker.status,
-        "planner": {"configured": bool(await state.planner.key()), "model": state.settings.llm_model},
+        "planner": {
+            "configured": bool(await state.planner.key()),
+            "model": state.settings.llm_model,
+            "vision_max_images": state.settings.vision_max_images,
+            "vision_max_edge": state.settings.vision_max_edge,
+        },
         "storage": {
             "free_bytes": shutil.disk_usage(state.settings.data_dir).free,
             "minimum_free_bytes": state.settings.minimum_free_bytes,

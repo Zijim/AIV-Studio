@@ -57,6 +57,14 @@ import { Button, Empty, Modal } from "./components/ui";
 
 const activeStates = ["queued", "running", "saving"];
 const executeKeys = new Map<string, string>();
+const imageRoles: Record<string, string> = {
+  auto: "自动判断用途",
+  edit_source: "待编辑原图",
+  subject_reference: "主体参考",
+  style_reference: "风格参考",
+  composition_reference: "构图参考",
+  first_frame: "视频首帧",
+};
 function Thumb({ asset }: { asset: Data }) {
   return asset.preview_url && asset.presence !== "purged" ? (
     <img src={asset.preview_url} alt={asset.name} loading="lazy" />
@@ -137,7 +145,15 @@ export default function App() {
   });
   const draft = plans.data?.find((p) => p.state === "draft");
   const allAssets: Data[] = assets.data?.items ?? [];
-  const selected = allAssets.filter((a) => store.selected.includes(a.id));
+  const selectedAssets = useQuery({
+    queryKey: ["selected-assets", store.projectId, store.selected],
+    queryFn: () =>
+      Promise.all(store.selected.map((id) => api(`/assets/${id}`))),
+    enabled: !!project && !!store.selected.length,
+  });
+  const selected = store.selected.length ? (selectedAssets.data ?? []) : [];
+  const imageCount = selected.filter((a) => a.media_type === "image").length;
+  const visionLimit = health.data?.planner.vision_max_images ?? 6;
   const running =
     tasks.data?.filter((t) => activeStates.includes(t.state)) ?? [];
   const writable = !!project && !project.archived_at;
@@ -296,6 +312,21 @@ export default function App() {
   }
   async function send(event: FormEvent) {
     event.preventDefault();
+    if (
+      store.selected.length &&
+      (selectedAssets.isPending || selectedAssets.isError)
+    ) {
+      setToast(
+        selectedAssets.isError
+          ? "无法获取所选素材，请重新选择后发送。"
+          : "正在读取所选素材信息，请稍候。",
+      );
+      return;
+    }
+    if (imageCount > visionLimit) {
+      setToast(`每轮最多读取 ${visionLimit} 张图片，请减少选择。`);
+      return;
+    }
     const parsed = messageSchema.safeParse(message);
     if (!parsed.success) {
       setToast(parsed.error.issues[0].message);
@@ -305,6 +336,11 @@ export default function App() {
       await api(`/projects/${project!.id}/messages`, "POST", {
         content: parsed.data,
         selected_asset_ids: store.selected,
+        image_roles: Object.fromEntries(
+          Object.entries(store.imageRoles).filter(([id]) =>
+            store.selected.includes(id),
+          ),
+        ),
         idempotency_key: crypto.randomUUID(),
       });
       setMessage("");
@@ -787,6 +823,41 @@ export default function App() {
                   <small>{clock(m.created_at)}</small>
                 </span>
                 <p>{m.content}</p>
+                {!!m.details?.vision_images?.length && (
+                  <div className="message-images">
+                    {m.details.vision_images.map((image: Data) => (
+                      <span
+                        key={image.asset_id}
+                        title={`素材 ${image.asset_id}`}
+                      >
+                        附图 {image.index} · {image.name} ·{" "}
+                        {imageRoles[image.purpose]}
+                        {image.frame === "first" && "（仅动画首帧）"}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {!!m.details?.visual_observations?.length && (
+                  <details className="visual-observations">
+                    <summary>
+                      模型图片观察 · {m.details.visual_observations.length} 张
+                    </summary>
+                    {m.details.visual_observations.map((item: Data) => (
+                      <div key={item.asset_id}>
+                        <strong>
+                          {item.name} · {imageRoles[item.purpose]}
+                        </strong>
+                        <p>{item.observation}</p>
+                        {item.uncertainties && (
+                          <small>不确定之处：{item.uncertainties}</small>
+                        )}
+                        <small>
+                          本轮读图尺寸 {item.sent_width} × {item.sent_height}
+                        </small>
+                      </div>
+                    ))}
+                  </details>
+                )}
               </div>
             ))}
             {(busy === "message" || planningTurn) && (
@@ -895,24 +966,74 @@ export default function App() {
           </div>
           <form className="composer" onSubmit={send}>
             {store.selected.length > 0 && (
-              <div className="context-selection">
-                <Layers3 size={13} />
-                已加入 {store.selected.length} 份素材
-                <Button
-                  aria-label="取消素材选择"
-                  onClick={store.clear}
-                  type="button"
+              <>
+                <div className="context-selection">
+                  <Layers3 size={13} />
+                  已加入 {store.selected.length} 份素材
+                  <Button
+                    aria-label="取消素材选择"
+                    onClick={store.clear}
+                    type="button"
+                  >
+                    <X size={13} />
+                  </Button>
+                </div>
+                <div className="selected-context-assets">
+                  {selected.map((asset) => (
+                    <div className="selected-context-asset" key={asset.id}>
+                      <Thumb asset={asset} />
+                      <div>
+                        <span title={asset.name}>{asset.name}</span>
+                        {asset.media_type === "image" ? (
+                          <select
+                            aria-label={`${asset.name} 的读图用途`}
+                            value={store.imageRoles[asset.id] ?? "auto"}
+                            disabled={!!planningTurn || busy === "message"}
+                            onChange={(e) =>
+                              store.setImageRole(asset.id, e.target.value)
+                            }
+                          >
+                            {Object.entries(imageRoles).map(
+                              ([value, label]) => (
+                                <option key={value} value={value}>
+                                  {label}
+                                </option>
+                              ),
+                            )}
+                          </select>
+                        ) : (
+                          <small>仅发送文件信息，尚不读取内容</small>
+                        )}
+                      </div>
+                      <Button
+                        type="button"
+                        aria-label={`取消选择 ${asset.name}`}
+                        onClick={() => store.chooseAsset(asset.id, true)}
+                      >
+                        <X size={12} />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+                <div
+                  className={`vision-notice ${imageCount > visionLimit ? "over-limit" : ""}`}
                 >
-                  <X size={13} />
-                </Button>
-              </div>
+                  {selectedAssets.isPending
+                    ? "正在读取素材信息…"
+                    : selectedAssets.isError
+                      ? "素材信息读取失败，请重新选择。"
+                      : imageCount
+                        ? `本轮 ${imageCount} 张图片将发送至 DeepSeek 读图（上限 ${visionLimit} 张）`
+                        : "本轮仅发送素材文字信息"}
+                </div>
+              </>
             )}
             <textarea
               aria-label="发送给创作助手"
               placeholder={
                 !health.data?.planner.configured
                   ? "先在设置中配置 DeepSeek 官方 API key"
-                  : "描述想法，或告诉我怎么调整…"
+                  : "描述想法，选中图片或粘贴本工作台的图片链接…"
               }
               value={message}
               onChange={(e) => setMessage(e.target.value)}
@@ -933,6 +1054,11 @@ export default function App() {
                 }
               }}
             />
+            {message.includes("/api/v1/assets/") && (
+              <div className="vision-notice">
+                当前项目的本工作台图片链接会自动加入读图，无需重复选择素材。
+              </div>
+            )}
             <div className="composer-footer">
               <span>
                 {running.length
@@ -950,6 +1076,9 @@ export default function App() {
                   !!planningTurn ||
                   !!busy ||
                   !!running.length ||
+                  imageCount > visionLimit ||
+                  (!!store.selected.length &&
+                    (selectedAssets.isPending || selectedAssets.isError)) ||
                   !message.trim() ||
                   !health.data?.planner.configured
                 }
@@ -2112,7 +2241,8 @@ function SettingsDialog({
               </small>
             )}
             <p className="muted">
-              助手会发送需求、项目背景和素材描述。图像与视频在本机生成；密钥不写入工作流或备份。
+              助手会发送需求、项目背景、素材描述和选中图片的读图副本至
+              DeepSeek。视频暂只发送文件信息。图像与视频生成在本机完成；密钥不写入工作流或备份。
             </p>
             <p className="muted">
               输入上限 {(s.max_input_tokens / 1024).toFixed(0)}K tokens，达到

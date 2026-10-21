@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     history_summary_threshold_tokens: int = 96 * 1024
     history_recent_tokens: int = 24 * 1024
     max_output_tokens: int = 8 * 1024
+    vision_max_images: int = Field(default=6, ge=1, le=12)
+    vision_max_edge: int = Field(default=1536, ge=512, le=2048)
     llm_timeout: int = 60
     turn_budget_usd: float = 0.15
     daily_budget_usd: float = 0.50
@@ -62,6 +64,8 @@ def load_settings() -> Settings:
                 "history_summary_threshold_tokens": "history_summary_threshold_tokens",
                 "history_recent_tokens": "history_recent_tokens",
                 "max_output_tokens": "max_output_tokens",
+                "vision_max_images": "vision_max_images",
+                "vision_max_edge": "vision_max_edge",
                 "timeout_seconds": "llm_timeout",
                 "turn_budget_usd": "turn_budget_usd",
                 "daily_budget_usd": "daily_budget_usd",
