@@ -100,6 +100,7 @@ class AgentTurn(Entity, Base):
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
     conversation_id: Mapped[str | None] = mapped_column(ForeignKey("conversations.id"), index=True)
     state: Mapped[str] = mapped_column(default="planning")
+    stage: Mapped[str | None]
     call_count: Mapped[int] = mapped_column(default=0)
     error: Mapped[dict | None] = mapped_column(JSON)
     context_id: Mapped[str | None] = mapped_column(ForeignKey("context_snapshots.id"))
@@ -133,6 +134,7 @@ class Plan(Base):
     candidate_count: Mapped[int] = mapped_column(default=1)
     seed_list: Mapped[list] = mapped_column(JSON)
     change_summary: Mapped[str] = mapped_column(Text, default="")
+    prompt_metadata: Mapped[dict | None] = mapped_column(JSON)
     based_on_execution_id: Mapped[str | None]
     project_revision: Mapped[int]
     plan_hash: Mapped[str]

@@ -1,0 +1,9 @@
+[
+  {
+    "request": "雨后街角的一辆红色自行车，水彩风格",
+    "document": {
+      "positive_prompt": "Watercolor illustration of a red bicycle leaning against a pale stone wall at a quiet street corner after rain. Shallow puddles reflect the bicycle frame; soft overcast light and loose paper-textured washes.",
+      "negative_prompt": ""
+    }
+  }
+]

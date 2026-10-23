@@ -1,0 +1,15 @@
+[
+  {
+    "request": "只把背景换成浅灰色",
+    "document": {
+      "instruction": "Replace only the background with a plain light-gray backdrop. Preserve the person’s visible identity, clothing, pose, framing and lighting.",
+      "keep": [
+        "人物、服装、姿态及构图"
+      ],
+      "changes": [
+        "背景变为浅灰"
+      ],
+      "negative_prompt": ""
+    }
+  }
+]

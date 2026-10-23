@@ -1,0 +1,20 @@
+[
+  {
+    "request": "首帧是一只手放在关闭的雨伞柄上，让它打开雨伞，固定镜头无配乐。",
+    "document": {
+      "shots": [
+        {
+          "index": 1,
+          "cut_at_seconds": null,
+          "description": "A static close shot begins from <Picture 1>, retaining the hand, sleeve, closed umbrella and existing framing. The hand tightens around the handle and pushes the runner upward; the ribs spread continuously until the canopy is fully open. The hand settles into a steady grip as the fabric stops moving."
+        }
+      ],
+      "overall_soundscape": "A brief mechanical click accompanies the runner moving upward, followed by a soft snap and rustle of the opening canopy.",
+      "non_diegetic_music": "N/A"
+    }
+  },
+  {
+    "counterexample": "用角色三视图作为source_image，写“只出现一个角色，不要三视图”就声称换了开场。",
+    "correction": "该图仍是首帧；说明限制并准备独立的首帧编辑或澄清，不声称已使用角色参考模式。"
+  }
+]

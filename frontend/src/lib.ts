@@ -49,6 +49,7 @@ export const useWorkspace = create(
     conversationId: string;
     conversationsByProject: Record<string, string>;
     messageDrafts: Record<string, string>;
+    toolPreferences: Record<string, string>;
     conversationInputs: Record<
       string,
       { selected: string[]; imageRoles: Record<string, string> }
@@ -59,6 +60,7 @@ export const useWorkspace = create(
     chooseProject: (id: string) => void;
     chooseConversation: (id: string) => void;
     setMessageDraft: (id: string, value: string) => void;
+    setToolPreference: (id: string, value: string) => void;
     chooseAsset: (id: string, additive?: boolean) => void;
     setImageRole: (id: string, role: string) => void;
     clear: () => void;
@@ -69,6 +71,7 @@ export const useWorkspace = create(
       conversationId: "",
       conversationsByProject: {},
       messageDrafts: {},
+      toolPreferences: {},
       conversationInputs: {},
       selected: [],
       imageRoles: {},
@@ -121,6 +124,10 @@ export const useWorkspace = create(
         }),
       setMessageDraft: (id, value) =>
         set((s) => ({ messageDrafts: { ...s.messageDrafts, [id]: value } })),
+      setToolPreference: (id, value) =>
+        set((s) => ({
+          toolPreferences: { ...s.toolPreferences, [id]: value },
+        })),
       chooseAsset: (id, additive) =>
         set((s) => {
           const selected = additive

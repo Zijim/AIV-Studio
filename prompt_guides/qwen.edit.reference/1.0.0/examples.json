@@ -1,0 +1,15 @@
+[
+  {
+    "request": "把参考图的红色外套换到主图人物身上",
+    "document": {
+      "instruction": "Dress the person in the source image in the red coat shown in the reference image, preserving its visible cut and fabric details. Keep the source person’s identity, pose, background and framing unchanged; do not add the reference person.",
+      "keep": [
+        "主图人物身份、姿态、背景"
+      ],
+      "changes": [
+        "参考图红外套"
+      ],
+      "negative_prompt": "additional person"
+    }
+  }
+]

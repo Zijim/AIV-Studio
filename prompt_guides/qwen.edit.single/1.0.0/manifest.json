@@ -1,0 +1,27 @@
+{
+  "id": "qwen.edit.single",
+  "version": "1.0.0",
+  "task_mode": "image_edit_single",
+  "output_format": "edit",
+  "shared": [
+    "shared/1.0.0/creative_rules.md"
+  ],
+  "description": "基于一张主图作单次快速修改，适合换背景、变姿态或准备视频首帧。",
+  "use_cases": [
+    "修改已有图片",
+    "从角色图准备独立首帧"
+  ],
+  "limitations": [
+    "必须有source_image",
+    "新构图和重要道具需要明确要求，不能当成已存在"
+  ],
+  "provenance": "application tool capabilities",
+  "adaptations": [
+    "基于当前注册工作流及参数Schema"
+  ],
+  "files": {
+    "qwen.edit.single/1.0.0/guide.md": "34021c22c5775e2a87c22f72c0e1112e1c09cdb10b6eeac50ebf7fb560ce83dc",
+    "qwen.edit.single/1.0.0/examples.json": "1778302e52d519015361f1661a66605d6ae093533dcf2b17a436527f0cb1d425",
+    "shared/1.0.0/creative_rules.md": "d73bd4c127e1b48fa97d01b746e709f9ac4959262cc3fbbc32cdd839417ed5af"
+  }
+}

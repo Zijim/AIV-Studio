@@ -85,7 +85,19 @@ async def health(request: Request):
 
 @router.get("/tools")
 async def tools(request: Request):
-    return svc(request).registry.public()
+    state = svc(request)
+    cards = {card["id"]: card for card in state.planner.guides.cards(state.registry, state.settings)}
+    return [
+        {
+            **tool,
+            "assistant_guidance": {
+                "available": cards[tool["id"]]["assistant_available"],
+                "task_mode": cards[tool["id"]]["task_mode"],
+                "issue": cards[tool["id"]]["guide_issue"],
+            },
+        }
+        for tool in state.registry.public()
+    ]
 
 
 @router.post("/system/shutdown")
@@ -496,9 +508,10 @@ async def edit_plan(request: Request, plan_id: str, body: PlanPatch):
         project_id = p.project_id
     return await svc(request).plans.create(
         project_id,
-        ManualPlan(**body.model_dump(exclude={"revision", "accept_previous_context"})),
+        ManualPlan(**body.model_dump(exclude={"revision", "accept_previous_context", "prompt_mode"})),
         plan_id=plan_id,
         expected_revision=body.revision,
+        prompt_mode=body.prompt_mode,
     )
 
 
@@ -604,6 +617,7 @@ async def retry_task(request: Request, task_id: str):
         ),
         origin="retry",
         conversation_id=t.conversation_id,
+        prompt_metadata=plan.prompt_metadata,
     )
     return result
 

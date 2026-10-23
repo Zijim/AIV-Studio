@@ -53,6 +53,7 @@ class ManualPlan(StrictModel):
 class PlanPatch(ManualPlan):
     revision: int
     accept_previous_context: bool = False
+    prompt_mode: Literal["guided", "manual"] | None = None
 
 
 class ExecutePlan(StrictModel):
@@ -118,6 +119,12 @@ class AssetNote(StrictModel):
     revision: int | None = None
 
 
+class RevisePlan(StrictModel):
+    plan_id: str
+    revision: int = Field(ge=1)
+    rewrite_only: bool = False
+
+
 class MessageRequest(StrictModel):
     content: str = Field(min_length=1, max_length=16000)
     selected_asset_ids: list[str] = Field(default_factory=list, max_length=30)
@@ -127,6 +134,8 @@ class MessageRequest(StrictModel):
     ] = Field(default_factory=dict, max_length=30)
     idempotency_key: str = Field(min_length=8, max_length=120)
     conversation_id: str | None = None
+    preferred_tool_id: str | None = None
+    revise_plan: RevisePlan | None = None
 
     @model_validator(mode="after")
     def selected_roles(self):

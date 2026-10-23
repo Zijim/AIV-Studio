@@ -93,6 +93,24 @@ class Registry:
             tool["availability"] = "offline"
             tool["issues"] = [reason]
 
+    @staticmethod
+    def resolve_video(params, info, settings):
+        ratio = (
+            info["width"] / info["height"]
+            if params["aspect_ratio"] == "source"
+            else float(params["aspect_ratio"].split(":")[0]) / float(params["aspect_ratio"].split(":")[1])
+        )
+        pixels = params["megapixels"] * 1024**2
+        width = max(32, round(math.sqrt(pixels * ratio) / 32) * 32)
+        height = max(32, round(math.sqrt(pixels / ratio) / 32) * 32)
+        if width * height > settings.video_max_pixels:
+            raise AppError("resource_limit", "对齐后的实际视频面积超过资源上限。")
+        frames = max(5, round(params["duration_seconds"] * 24))
+        frames += (5 - frames % 17) % 17
+        if frames > settings.video_max_frames:
+            raise AppError("resource_limit", "实际视频帧数超过资源上限。")
+        return dict(width=width, height=height, resolved_frames=frames, resolved_seconds=frames / 24)
+
     def normalize(self, tool_id, values, assets, settings, count=1):
         tool = self.get(tool_id)
         if tool_id == "image.generate.qwen" and values.get("preset") == "quality":
@@ -149,22 +167,8 @@ class Registry:
             dimensions = dict(width=round(width * params["scale"]), height=round(height * params["scale"]))
         elif tool["category"] == "video":
             info = assets["source_image"]["media_info"]
-            ratio = (
-                info["width"] / info["height"]
-                if params["aspect_ratio"] == "source"
-                else math.prod([float(x) for x in params["aspect_ratio"].split(":")[:1]])
-                / float(params["aspect_ratio"].split(":")[1])
-            )
-            pixels = params["megapixels"] * 1024**2
-            width = max(32, round(math.sqrt(pixels * ratio) / 32) * 32)
-            height = max(32, round(math.sqrt(pixels / ratio) / 32) * 32)
-            if width * height > settings.video_max_pixels:
-                raise AppError("resource_limit", "对齐后的实际视频面积超过资源上限。")
-            frames = max(5, round(params["duration_seconds"] * 24))
-            frames += (5 - frames % 17) % 17
-            if frames > settings.video_max_frames:
-                raise AppError("resource_limit", "实际视频帧数超过资源上限。")
-            params.update(width=width, height=height, resolved_frames=frames, resolved_seconds=frames / 24)
+            params.update(self.resolve_video(params, info, settings))
+            width, height, frames = params["width"], params["height"], params["resolved_frames"]
             dimensions = dict(
                 width=width,
                 height=height,

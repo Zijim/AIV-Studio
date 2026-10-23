@@ -1901,3 +1901,189 @@ details small {
   place-items: center;
   color: #858b99;
 }
+
+.composer-tool-choice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #a9a7a3;
+  font-size: 11px;
+  margin: 0 0 9px;
+}
+.composer-tool-choice > svg {
+  color: #dba574;
+}
+.composer-tool-choice select {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #3b3631;
+  border-radius: 7px;
+  background: #24211e;
+  color: #e6c5a5;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+.composer-tool-choice > button {
+  padding: 5px;
+  color: #aaa;
+}
+.creative-summary {
+  font-size: 11px;
+  line-height: 1.7;
+}
+.creative-summary p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tool-selection-reason {
+  color: #d5b28e;
+}
+.creative-assumptions {
+  padding: 8px 10px;
+  border-left: 2px solid #8e6745;
+  background: #30271f66;
+  border-radius: 0 6px 6px 0;
+  margin: 8px 0;
+}
+.creative-assumptions > span {
+  font-size: 10px;
+  color: #c6a789;
+}
+.creative-assumptions p {
+  margin: 3px 0;
+}
+.constraint-review {
+  margin: 8px 0;
+}
+.constraint-review small,
+.prompt-provenance small {
+  color: #91908f;
+  font-size: 10px;
+}
+.guided-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+.guided-input {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+.guided-input img {
+  width: 45px;
+  height: 45px;
+  border: 1px solid #44403b;
+  border-radius: 6px;
+  object-fit: contain;
+  background: #161718;
+}
+.guided-input > div {
+  min-width: 0;
+}
+.guided-input small {
+  display: block;
+  color: #c6a789;
+  font-size: 10px;
+}
+.guided-input span {
+  display: block;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.guided-prompt {
+  min-width: 0;
+}
+.prompt-toolbar {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  align-items: center;
+  margin: 9px 0;
+}
+.prompt-toolbar button {
+  padding: 4px 7px;
+  font-size: 10px;
+}
+.prompt-origin {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #aaa39a;
+  font-size: 10px;
+}
+.prompt-origin.validated {
+  color: #b5c7ac;
+}
+.prompt-section {
+  padding: 8px 10px;
+  margin: 7px 0;
+  border: 1px solid #3b3936;
+  border-radius: 7px;
+  background: #1c1d1f;
+}
+.prompt-section h4 {
+  color: #dbb18b;
+  font-size: 10px;
+  font-weight: 500;
+  margin: 0 0 5px;
+}
+.prompt-section p {
+  color: #c5c4c2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.7;
+  margin: 0;
+}
+.prompt-raw,
+.prompt-provenance {
+  margin: 10px 0;
+}
+.prompt-raw > summary,
+.prompt-provenance > summary {
+  color: #969494;
+  font-size: 10px;
+}
+.prompt-provenance p {
+  font-size: 10px;
+  color: #a39c94;
+  margin: 5px 0;
+}
+.prompt-hash {
+  overflow-wrap: anywhere;
+}
+.prompt-parameters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px 12px;
+  padding: 10px 0;
+  margin: 8px 0;
+  border-top: 1px solid #3b3936;
+  font-size: 10px;
+}
+.prompt-parameters dt {
+  color: #969494;
+}
+.prompt-parameters dd {
+  color: #d4d1cd;
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+}
+.plan-actions {
+  flex-wrap: wrap;
+}
+.manual-prompt-notice {
+  padding: 10px 12px;
+  background: #30271f;
+  color: #d3b394;
+  border: 1px solid #514131;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.7;
+}

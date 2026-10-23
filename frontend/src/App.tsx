@@ -59,6 +59,11 @@ import {
 } from "./lib";
 import { Button, Empty, Modal } from "./components/ui";
 import { ConversationSwitcher } from "./components/ConversationSwitcher";
+import {
+  CreativeSummary,
+  PlanInputs,
+  PromptDetails,
+} from "./components/GuidedPrompt";
 
 const activeStates = ["queued", "running", "saving"];
 const executeKeys = new Map<string, string>();
@@ -425,10 +430,39 @@ export default function App() {
             store.selected.includes(id),
           ),
         ),
+        preferred_tool_id: store.toolPreferences?.[targetConversation] || null,
         idempotency_key: crypto.randomUUID(),
       });
       store.setMessageDraft(targetConversation, "");
     });
+  }
+
+  async function rewritePrompt(plan: Data) {
+    if (!conversationWritable || planningTurn || conversationRunning.length)
+      return;
+    await action("rewrite", () =>
+      api(`/projects/${project!.id}/messages`, "POST", {
+        content:
+          "请按当前要求和对应工具指引重新编写提示词，保持工具、输入和执行参数不变。",
+        conversation_id: cid,
+        preferred_tool_id: plan.tool_id,
+        revise_plan: {
+          plan_id: plan.id,
+          revision: plan.revision,
+          rewrite_only: true,
+        },
+        selected_asset_ids: [
+          ...new Set(plan.inputs.map((input: Data) => input.asset_id)),
+        ],
+        image_roles: Object.fromEntries(
+          plan.inputs.map((input: Data) => [
+            input.asset_id,
+            plan.tool_id.startsWith("video.") ? "first_frame" : "auto",
+          ]),
+        ),
+        idempotency_key: crypto.randomUUID(),
+      }),
+    );
   }
 
   return (
@@ -980,7 +1014,11 @@ export default function App() {
             {(busy === "message" || planningTurn) && (
               <div className="thinking">
                 <LoaderCircle className="spin" size={16} />
-                正在理解需求、准备方案…
+                {planningTurn?.stage === "composing"
+                  ? "正在编写创作提示词…"
+                  : planningTurn?.stage === "validating"
+                    ? "正在检查方案…"
+                    : "正在理解需求、选择工具…"}
                 {planningTurn && (
                   <Button
                     disabled={!!busy}
@@ -1005,6 +1043,7 @@ export default function App() {
                   <span>待确认 · v{draft.revision}</span>
                 </div>
                 <p>{draft.change_summary || "按以下参数执行一次创作。"}</p>
+                <CreativeSummary plan={draft} />
                 <div className="plan-specs">
                   <span>{draft.candidate_count} 个候选</span>
                   {draft.parameters.width && (
@@ -1019,34 +1058,31 @@ export default function App() {
                     </span>
                   )}
                 </div>
-                {draft.inputs.length > 0 && (
-                  <div className="plan-inputs">
-                    {draft.inputs.map((input: Data) => (
-                      <span key={input.slot}>
-                        {
-                          tools.data
-                            ?.find((t) => t.id === draft.tool_id)
-                            ?.inputs.find((i: Data) => i.slot === input.slot)
-                            ?.label
-                        }
-                        ：
-                        {allAssets.find((a) => a.id === input.asset_id)?.name ||
-                          input.asset_id.slice(0, 8)}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                <details>
-                  <summary>提示词与参数</summary>
-                  <p className="prompt-text">
-                    {draft.parameters.prompt ||
-                      draft.parameters.instruction ||
-                      `放大 ${draft.parameters.scale} 倍`}
-                  </p>
-                  <small>种子：{draft.seed_list.join("、")}</small>
-                </details>
+                <PlanInputs plan={draft} tools={tools.data ?? []} />
+                <PromptDetails
+                  key={`${draft.id}-${draft.revision}`}
+                  plan={draft}
+                  onError={setToast}
+                />
                 <div className="plan-actions">
                   <Button
+                    title="按专用指引重新编写，保留执行参数"
+                    disabled={
+                      !conversationWritable ||
+                      !!busy ||
+                      !!planningTurn ||
+                      !!conversationRunning.length ||
+                      !tools.data?.find((t) => t.id === draft.tool_id)
+                        ?.assistant_guidance?.available ||
+                      draft.tool_id === "image.upscale.seedvr2"
+                    }
+                    onClick={() => rewritePrompt(draft)}
+                  >
+                    <RefreshCw size={14} />
+                    改写提示词
+                  </Button>
+                  <Button
+                    disabled={!!planningTurn || !!busy}
                     onClick={() => {
                       const t = tools.data?.find((t) => t.id === draft.tool_id);
                       if (t) openTool(t, draft);
@@ -1073,6 +1109,7 @@ export default function App() {
                     disabled={
                       !conversationWritable ||
                       !!busy ||
+                      !!planningTurn ||
                       !!conversationRunning.length
                     }
                     onClick={() => execute(draft)}
@@ -1086,6 +1123,40 @@ export default function App() {
             <div ref={chatEnd} />
           </div>
           <form className="composer" onSubmit={send}>
+            <label className="composer-tool-choice">
+              <WandSparkles size={13} />
+              <span>工具</span>
+              <select
+                aria-label="助手工具选择"
+                value={store.toolPreferences?.[cid ?? ""] ?? ""}
+                disabled={!conversationWritable || !!planningTurn || !!busy}
+                onChange={(event) => {
+                  if (cid) store.setToolPreference(cid, event.target.value);
+                }}
+              >
+                <option value="">自动选择</option>
+                {(tools.data ?? []).map((t) => (
+                  <option
+                    key={t.id}
+                    value={t.id}
+                    disabled={!t.assistant_guidance?.available}
+                  >
+                    {t.name}
+                    {!t.assistant_guidance?.available ? " · 当前不可用" : ""}
+                  </option>
+                ))}
+              </select>
+              {cid && store.toolPreferences?.[cid] && (
+                <button
+                  type="button"
+                  aria-label="恢复自动选择工具"
+                  disabled={!!planningTurn || !!busy}
+                  onClick={() => store.setToolPreference(cid, "")}
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </label>
             {store.selected.length > 0 && (
               <>
                 <div className="context-selection">
@@ -1758,10 +1829,16 @@ function ToolEditor({
             candidate_count: count,
             change_summary: summary,
             based_on_execution_id: plan?.based_on_execution_id || null,
+            ...(plan?.prompt_metadata ? { prompt_mode: "manual" } : {}),
           });
         }}
       >
         <div className="tool-form">
+          {plan?.prompt_metadata && (
+            <p className="manual-prompt-notice">
+              此处为手动编辑，保存后保留指引来源并标记为手动方案。需要按专用指引改写时，请使用方案卡的“改写提示词”。
+            </p>
+          )}
           {tool.inputs.map((input: Data) => (
             <label key={input.slot}>
               {input.label}

@@ -1,0 +1,44 @@
+[
+  {
+    "tool_id": "image.generate.zimage",
+    "tool_version": "1.0.0",
+    "task_mode": "image_generate",
+    "guide_id": "zimage.generate",
+    "guide_version": "1.0.0"
+  },
+  {
+    "tool_id": "image.generate.qwen",
+    "tool_version": "1.0.0",
+    "task_mode": "image_generate",
+    "guide_id": "qwen.generate",
+    "guide_version": "1.0.0"
+  },
+  {
+    "tool_id": "image.edit.qwen.fast",
+    "tool_version": "1.0.0",
+    "task_mode": "image_edit_single",
+    "guide_id": "qwen.edit.single",
+    "guide_version": "1.0.0"
+  },
+  {
+    "tool_id": "image.edit.qwen.reference",
+    "tool_version": "1.0.0",
+    "task_mode": "image_edit_reference",
+    "guide_id": "qwen.edit.reference",
+    "guide_version": "1.0.0"
+  },
+  {
+    "tool_id": "image.upscale.seedvr2",
+    "tool_version": "1.0.0",
+    "task_mode": "image_upscale",
+    "guide_id": "seedvr2.upscale",
+    "guide_version": "1.0.0"
+  },
+  {
+    "tool_id": "video.generate.minimax_i2v",
+    "tool_version": "1.0.0",
+    "task_mode": "video_i2va",
+    "guide_id": "minimax_h3.i2va",
+    "guide_version": "1.0.0"
+  }
+]

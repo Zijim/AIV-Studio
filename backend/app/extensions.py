@@ -26,7 +26,9 @@ async def capabilities(request: Request):
         "planner": {
             "provider": "deepseek_official_responses",
             "structured_output": True,
-            "max_calls_per_turn": 2,
+            "max_calls_per_turn": 3,
+            "guided_prompt_generation": True,
+            "stages": ["routing", "composing", "validating"],
             "vision": True,
             "multiple_conversations": True,
         },

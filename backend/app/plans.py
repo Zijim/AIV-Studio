@@ -1,5 +1,6 @@
 import hashlib
 import json
+from copy import deepcopy
 
 from sqlalchemy import func, select
 
@@ -19,6 +20,7 @@ from .models import (
     row_dict,
     uid,
 )
+from .prompt_compile import metadata_digest
 from .schemas import ManualPlan
 
 ACTIVE_TASKS = ("queued", "running", "saving")
@@ -57,6 +59,8 @@ class PlanService:
         preserve_seed=False,
         replace_owner=False,
         conversation_id=None,
+        prompt_metadata=None,
+        prompt_mode=None,
     ):
         tool = self.registry.get(request.tool_id)
         # Derived values are recomputed, never trusted when a plan is edited.
@@ -112,6 +116,29 @@ class PlanService:
             params, seeds, dimensions = self.registry.normalize(
                 tool["id"], values, assets, self.settings, request.candidate_count
             )
+            if prompt_metadata is None and latest and latest.prompt_metadata:
+                prompt_metadata = deepcopy(latest.prompt_metadata)
+                text_keys = ("prompt", "instruction", "negative_prompt")
+                text_changed = any(params.get(k) != latest.parameters.get(k) for k in text_keys)
+                inputs_changed = refs != latest.inputs
+                timing_changed = params.get("duration_seconds") != latest.parameters.get("duration_seconds")
+                if prompt_mode == "manual" or text_changed:
+                    prompt_metadata.update(
+                        generation_origin="user_edited",
+                        validation_status="manual_unchecked",
+                        sections=[],
+                        prompt_document=None,
+                        parent_plan={"id": latest.id, "revision": latest.revision},
+                    )
+                    prompt_metadata["compiled_prompt_sha256"] = hashlib.sha256(
+                        (params.get("prompt") or params.get("instruction") or "").encode()
+                    ).hexdigest()
+                elif inputs_changed or timing_changed:
+                    raise AppError("prompt_stale", "输入或时长已改变，请重新编写提示词，或明确转为手动方案保存。", 409)
+            if prompt_mode == "guided" and (
+                not prompt_metadata or prompt_metadata.get("validation_status") != "structure_validated"
+            ):
+                raise AppError("prompt_unvalidated", "当前文本为手动编辑内容，不能标记为专用指引已校验。", 409)
             revision = 1
             if plan_id:
                 if latest.revision != expected_revision:
@@ -141,6 +168,8 @@ class PlanService:
                 candidate_count=request.candidate_count,
                 project_revision=context_revision,
             )
+            if prompt_metadata:
+                snapshot["generation_metadata_hash"] = metadata_digest(prompt_metadata)
             plan = Plan(
                 id=plan_id,
                 revision=revision,
@@ -155,6 +184,7 @@ class PlanService:
                 seed_list=seeds,
                 candidate_count=request.candidate_count,
                 change_summary=request.change_summary,
+                prompt_metadata=prompt_metadata,
                 based_on_execution_id=request.based_on_execution_id,
                 project_revision=context_revision,
                 plan_hash=digest(snapshot),
@@ -199,7 +229,11 @@ class PlanService:
                 .where(AgentTurn.conversation_id == conversation.id, AgentTurn.state == "planning")
                 .limit(1)
             )
-            if planning and plan.origin == "agent":
+            replacing = False
+            if planning and planning.context_id:
+                snapshot = await session.get(ContextSnapshot, planning.context_id)
+                replacing = (snapshot.data.get("revise_plan") or {}).get("plan_id") == plan.id
+            if planning and (plan.origin == "agent" or replacing):
                 raise AppError("planner_busy", "请等待或放弃当前助手规划，再执行这个方案。", 409)
             active = await session.scalar(
                 select(Task.id).where(Task.conversation_id == conversation.id, Task.state.in_(ACTIVE_TASKS)).limit(1)
@@ -256,6 +290,7 @@ class PlanService:
                             if plan.tool_id.startswith("video.")
                             else self.settings.image_timeout_seconds,
                             "template_hash": self.registry.get(plan.tool_id)["template_hash"],
+                            "prompt_generation": plan.prompt_metadata,
                         },
                     )
                 )

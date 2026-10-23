@@ -1,0 +1,17 @@
+{
+  "captured_on": "2026-10-21",
+  "files": [
+    {
+      "source": "F:\\ComfyUI\\references\\prompt-templates\\fl2va-官方提示词模板.md",
+      "file": "fl2va-original.md",
+      "sha256": "2cfebc096a6e08370f288d468d90b60f7f9bcb938f94bf090816e910e48e75fc",
+      "use": "I2VA/shared adaptation"
+    },
+    {
+      "source": "F:\\ComfyUI\\references\\prompt-templates\\ref2va-官方提示词模板.md",
+      "file": "ref2va-original.md",
+      "sha256": "1e574f356716ad55612247ffb7bbccbcdb484ad96599d63c7dca1af186b1fab7",
+      "use": "future reference only; not enabled"
+    }
+  ]
+}

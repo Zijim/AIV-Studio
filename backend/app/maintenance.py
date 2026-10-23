@@ -133,7 +133,7 @@ class MaintenanceService:
             with closing(sqlite3.connect(root / "app.sqlite3")) as src, closing(sqlite3.connect(snapshot)) as dest:
                 src.backup(dest)
             files = [("app.sqlite3", snapshot)]
-            for folder in ("blobs", "previews", "registry", "executions"):
+            for folder in ("blobs", "previews", "registry", "executions", "prompt_guides"):
                 files.extend(
                     (p.relative_to(root).as_posix(), p)
                     for p in (root / folder).rglob("*")
@@ -192,7 +192,13 @@ class MaintenanceService:
                 path = (destination / name).resolve()
                 if name in names or not path.is_relative_to(destination) or name.startswith(("/", "\\")) or ":" in name:
                     raise AppError("backup_path", "备份包含无效路径。")
-                if name != "app.sqlite3" and name.split("/")[0] not in ("blobs", "previews", "registry", "executions"):
+                if name != "app.sqlite3" and name.split("/")[0] not in (
+                    "blobs",
+                    "previews",
+                    "registry",
+                    "executions",
+                    "prompt_guides",
+                ):
                     raise AppError("backup_path", "备份包含未授权目录。")
                 names.add(name)
                 info = archive.getinfo(name)
