@@ -547,7 +547,11 @@ async def tasks(request: Request, project_id: str | None = None, limit: int = Qu
             result.append(
                 {
                     **row_dict(t),
-                    "tool_name": svc(request).registry.get(es[0].tool_id)["name"] if es else "",
+                    "tool_name": "生成视频"
+                    if any(e.configuration.get("step_count", 1) > 1 for e in es)
+                    else svc(request).registry.get(es[0].tool_id)["name"]
+                    if es
+                    else "",
                     "executions": [
                         {
                             k: v
@@ -586,7 +590,7 @@ async def cancel_task(request: Request, task_id: str):
             raise AppError("task_not_found", "任务不存在。", 404)
         t.cancel_requested = True
         for e in (await s.scalars(select(Execution).where(Execution.task_id == task_id))).all():
-            if e.execution_state in ("pending", "waiting_external"):
+            if e.execution_state in ("pending", "waiting_external", "blocked"):
                 e.execution_state, e.finished_at = "cancelled", now()
         record_event(s, "task.updated", t.project_id, task_id)
     await state.worker.aggregate(task_id)
@@ -601,23 +605,56 @@ async def retry_task(request: Request, task_id: str):
         if not t or t.state in ACTIVE_TASKS:
             raise AppError("retry_not_ready", "任务尚未结束，不能重做。", 409)
         plan = await s.get(Plan, (t.plan_id, t.plan_revision))
-        e = await s.scalar(
-            select(Execution).where(Execution.task_id == task_id).order_by(Execution.candidate_index).limit(1)
+        executions = list(
+            await s.scalars(select(Execution).where(Execution.task_id == task_id).order_by(Execution.candidate_index))
         )
+        e = executions[0]
+        continuation = (plan.prompt_metadata or {}).get("continuation")
+        if continuation and e.execution_state == "succeeded":
+            if e.storage_state != "complete":
+                raise AppError("dependency_storage", "请先补存已经生成的起始画面，再继续视频步骤。", 409)
+            if any(item.execution_state in ("unknown", "interrupted") for item in executions):
+                raise AppError("reconcile_first", "请先核实未确定的执行状态，再准备重试。", 409)
+            e = executions[-1]
+            refs = e.inputs
+            if not refs:
+                frame = await s.scalar(
+                    select(Asset)
+                    .join(ProjectAsset, ProjectAsset.asset_id == Asset.id)
+                    .where(
+                        Asset.execution_id == executions[0].id,
+                        Asset.role == "final",
+                        Asset.media_type == "image",
+                        ProjectAsset.project_id == t.project_id,
+                        ProjectAsset.removed_at.is_(None),
+                    )
+                )
+                if not frame:
+                    raise AppError("dependency_output", "已保存的起始画面不可用，请检查素材。", 409)
+                refs = [dict(slot="source_image", asset_id=frame.id)]
+            tool_id, parameters = e.tool_id, e.parameters
+            inputs = [dict(slot=ref["slot"], asset_id=ref["asset_id"]) for ref in refs]
+            prompt_metadata = e.configuration.get("prompt_generation")
+            count = 1
+        else:
+            tool_id, parameters, inputs = plan.tool_id, plan.parameters, plan.inputs
+            prompt_metadata, count = plan.prompt_metadata, plan.candidate_count
     # Retry is prepared as a new immutable plan; it still requires explicit execution.
     result = await svc(request).plans.create(
         t.project_id,
         ManualPlan(
-            tool_id=plan.tool_id,
-            inputs=plan.inputs,
-            parameters=plan.parameters,
-            candidate_count=plan.candidate_count,
-            change_summary="重做此前任务，保留原参数与种子。",
+            tool_id=tool_id,
+            inputs=inputs,
+            parameters=parameters,
+            candidate_count=count,
+            change_summary="从未完成步骤重试，复用已完成素材，保留参数与种子。"
+            if continuation
+            else "重做此前任务，保留原参数与种子。",
             based_on_execution_id=e.id,
         ),
         origin="retry",
         conversation_id=t.conversation_id,
-        prompt_metadata=plan.prompt_metadata,
+        prompt_metadata=prompt_metadata,
     )
     return result
 
@@ -628,7 +665,7 @@ async def best_asset(request: Request, task_id: str, asset_id: str = Body(embed=
         t = await s.get(Task, task_id)
         a = await s.get(Asset, asset_id)
         e = await s.get(Execution, a.execution_id) if a and a.execution_id else None
-        if not t or not e or e.task_id != task_id or a.role != "final":
+        if not t or not e or e.task_id != task_id or a.role != "final" or a.source_info.get("internal_preparation"):
             raise AppError("candidate_invalid", "最佳候选必须是本任务的最终结果。")
         t.best_asset_id = asset_id
         record_event(s, "task.updated", t.project_id, t.id)

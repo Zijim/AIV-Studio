@@ -8,6 +8,7 @@ from pathlib import Path
 from .config import ROOT
 from .errors import AppError
 from .schemas import PARAMETER_MODELS
+from .video_modes import VIDEO_MODES
 
 TOOL_MODES = {
     "image.generate.zimage": "image_generate",
@@ -15,7 +16,7 @@ TOOL_MODES = {
     "image.edit.qwen.fast": "image_edit_single",
     "image.edit.qwen.reference": "image_edit_reference",
     "image.upscale.seedvr2": "image_upscale",
-    "video.generate.minimax_i2v": "video_i2va",
+    **VIDEO_MODES,
 }
 
 

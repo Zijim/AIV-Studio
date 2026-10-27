@@ -1,0 +1,43 @@
+[
+  {
+    "request": "把参考图的红色外套换到主图人物身上",
+    "document": {
+      "instruction": "Dress the person in the source image in the red coat shown in the reference image, preserving its visible cut and fabric details. Keep the source person’s identity, pose, background and framing unchanged; do not add the reference person.",
+      "keep": [
+        "主图人物身份、姿态、背景"
+      ],
+      "changes": [
+        "参考图红外套"
+      ],
+      "negative_prompt": "additional person"
+    }
+  },
+  {
+    "case": "动作结果与首帧不能混淆",
+    "user": "以骑士为主体，把巨剑插入地面，最后双手扶剑。",
+    "shot_intent": {
+      "mode": "action",
+      "intent_quote": "以骑士为主体，把巨剑插入地面，最后双手扶剑。",
+      "start_state_zh": "持剑、剑尖尚未触地",
+      "progression_zh": "下压接触泥土并插入",
+      "end_state_zh": "剑插地、双手扶柄站稳",
+      "scene": {
+        "policy": "create",
+        "description_zh": "石墙前泥土地，侧后方自然光。",
+        "requires_surface": true,
+        "surface_zh": "可见泥土地",
+        "source": "assumption"
+      }
+    },
+    "scene_suggestion": "石墙前的泥土地，侧后方自然光，环境有纵深，地面和剑尖接触位置清楚可见。",
+    "bad": "黑底立绘已经双手扶剑，只加呼吸、微小重心变化；项目空白却声称项目禁止背景。"
+  },
+  {
+    "case": "尊重明确的静态展示要求",
+    "user": "保持黑色背景，骑士扶着已经插好的剑站立，只需轻微呼吸。",
+    "mode": "hold",
+    "policy": "plain",
+    "explicit_background": true,
+    "note": "保留黑底和微动，不强迫添加外景或插剑过程。"
+  }
+]

@@ -1,0 +1,27 @@
+{
+  "id": "minimax_h3.l2va",
+  "version": "1.2.0",
+  "task_mode": "video_l2va",
+  "output_format": "video",
+  "shared": [
+    "shared/1.2.0/creative_rules.md",
+    "shared/1.1.1/video_camera_audio.md"
+  ],
+  "description": "围绕指定结束画面推演此前动作。",
+  "use_cases": [
+    "围绕指定结束画面推演此前动作。"
+  ],
+  "limitations": [
+    "图片仅约束结尾，不能把它误作开场。"
+  ],
+  "provenance": "User-provided H3 FL2VA/Ref2VA guides and verified local core node schemas",
+  "adaptations": [
+    "Automatic mode selection by asset purpose; no technical route-choice interaction."
+  ],
+  "files": {
+    "minimax_h3.l2va/1.2.0/guide.md": "8cfc7f1a9436986e233389825bf1dce59bfb8612e5d39d69762724d1c0606a11",
+    "minimax_h3.l2va/1.2.0/examples.json": "a5338d955b09046ec0b16f3a9625b7955c763aae07dc722e474e6078745f932f",
+    "shared/1.2.0/creative_rules.md": "6eadafb1303d8d3b29c223b7fd2ff45bb44fd4fac7f1b66aad7589d9390a880b",
+    "shared/1.1.1/video_camera_audio.md": "5fe326037f8db2b0e4e01862718e4e3171638f2fe2cd18900d637a4e13ce0027"
+  }
+}

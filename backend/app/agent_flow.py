@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from .agent_routing import ROUTING_SYSTEM, CreativeBrief, RouteInput, RouterResult
+from .agent_routing import ROUTING_SYSTEM, CreativeBrief, RouteInput, RouterResult, VideoContinuation
 from .creative_policy import CreativePolicy
 from .errors import AppError
 from .goal_tracking import VideoGoalTracker
@@ -16,6 +16,7 @@ from .prompt_compile import compile_document, generation_metadata
 from .prompt_composition import COMPOSITION_SYSTEM, composition_model
 from .prompt_guides import TOOL_MODES
 from .schemas import PARAMETER_MODELS
+from .video_modes import REFERENCE_PURPOSES, VIDEO_MODES, check_input_slots, input_purpose, source_info
 
 
 @dataclass
@@ -103,7 +104,17 @@ class GuidedFlow:
                 return model.model_validate_json(raw)
         if isinstance(payload, dict) and isinstance(payload.get("creative_brief"), dict):
             brief = dict(payload["creative_brief"])
-            for key in ("based_on_plan_id", "based_on_execution_id", "frame_assessment", "shot_review"):
+            for key in (
+                "based_on_plan_id",
+                "based_on_execution_id",
+                "frame_assessment",
+                "shot_review",
+                "video_continuation",
+                "task_goal",
+                "preparation_consent_quote",
+                "direct_video_consent_quote",
+                "clarification_kind",
+            ):
                 if key not in brief or key not in model.model_fields:
                     continue
                 if key in payload and payload[key] != brief[key]:
@@ -112,15 +123,27 @@ class GuidedFlow:
                 changes.append(f"move_creative_brief.{key}")
             payload["creative_brief"] = brief
         if name == "composing" and isinstance(payload, dict):
+            if "shot_intent" in payload:
+                brief = dict(payload.get("creative_brief") or {})
+                if "shot_intent" in brief and brief["shot_intent"] != payload["shot_intent"]:
+                    raise ValueError("模型输出的镜头目标在不同层级互相冲突")
+                brief["shot_intent"] = payload.pop("shot_intent")
+                payload["creative_brief"] = brief
+                changes.append("move_root.shot_intent")
             document = payload.get("prompt_document")
             if isinstance(document, dict) and isinstance(document.get("shots"), list):
                 for index, shot in enumerate(document["shots"]):
                     # A known empty annotation is not creative content or an execution parameter.
                     # Keep rejecting unknown fields and nonempty annotations.
-                    if isinstance(shot, dict) and "cut_at_seconds_note_removed" in shot:
-                        if shot["cut_at_seconds_note_removed"] is None:
-                            shot.pop("cut_at_seconds_note_removed")
-                            changes.append(f"drop_empty_shot_annotation.{index}")
+                    if isinstance(shot, dict):
+                        for annotation in (
+                            "cut_at_seconds_note_removed",
+                            "cut_at_seconds_placeholder",
+                            "cut_at_seconds_note",
+                        ):
+                            if annotation in shot and shot[annotation] is None:
+                                shot.pop(annotation)
+                                changes.append(f"drop_empty_shot_annotation.{index}.{annotation}")
         value = model.model_validate(payload)
         if changes:
             self.trace.setdefault("format_normalizations", []).append({"stage": name, "changes": changes})
@@ -189,7 +212,7 @@ class GuidedFlow:
             request_builder=builder,
         )
 
-    async def run_stage(self, name, model, builder, validate):
+    async def run_stage(self, name, model, builder, validate, purpose=None):
         await self.stage(name)
         await self.compact(lambda context: builder(context, None))
         error = None
@@ -199,7 +222,7 @@ class GuidedFlow:
                     self.turn_id,
                     self.key,
                     builder(self.context, error),
-                    purpose="repair" if error else ("composition" if name == "composing" else "routing"),
+                    purpose="repair" if error else (purpose or ("composition" if name == "composing" else "routing")),
                 )
                 value = self.parse_stage_result(model, raw, name)
                 if name == "composing":
@@ -268,7 +291,7 @@ class GuidedFlow:
                 raise ValueError("回复/澄清/能力不足时不能同时提出工具操作")
             if route.kind == "clarify" and self.goals.goal:
                 if route.clarification_kind == "frame_choice":
-                    route.message_zh = self.goals.ask(route, route.message_zh)
+                    raise ValueError("技术路径由助手自动选择；按素材用途选择文生、参考或关键帧模式，不询问首帧二选一")
                 else:
                     self.goals.goal.update(state="awaiting_clarification", available_actions=[])
             return route
@@ -278,9 +301,9 @@ class GuidedFlow:
         self.p.guides.get(route.tool_id, tool["version"], route.task_mode)
         if tool["availability"] != "available":
             raise ValueError("工具不可用，应向用户说明而不是提出方案")
-        expected = {item["slot"] for item in tool["inputs"]}
-        if len(route.input_bindings) != len(expected) or {item.slot for item in route.input_bindings} != expected:
-            raise ValueError("输入槽位不完整或重复")
+        check_input_slots(tool, [item.slot for item in route.input_bindings])
+        order = {item["slot"]: index for index, item in enumerate(tool["inputs"])}
+        route.input_bindings.sort(key=lambda item: order[item.slot])
         assets = {item["id"]: item for item in self.context["assets"]}
         known_executions = {item["id"] for item in self.context["executions"] if item["state"] == "succeeded"}
         for ref in route.input_bindings:
@@ -296,21 +319,37 @@ class GuidedFlow:
             self.goals.goal
             and self.goals.goal.get("output_kind") == "video"
             and route.tool_id.startswith("image.")
-            and not self.goals.preparation_approved
+            and not route.video_continuation
         ):
-            message = self.goals.ask(route, "建议先编辑首帧以改善开场和动作衔接；这一步会先生成图片，视频尚未生成。")
-            return RouterResult(kind="clarify", message_zh=message, visual_observations=route.visual_observations)
+            raise ValueError("视频目标不能只交付图片；优先直接Ref2VA/T2VA，确需起始画面时声明video_continuation")
+        if route.video_continuation:
+            if not route.tool_id.startswith(("image.edit.", "image.generate.")):
+                raise ValueError("只有必要的起始画面准备可以声明后续视频步骤")
+            followup = self.p.registry.get(route.video_continuation.tool_id)
+            if followup["availability"] != "available":
+                raise ValueError("后续视频工具不可用，不能提出只有图片的半项任务")
+            self.p.guides.get(followup["id"], followup["version"])
         if self.request.preferred_tool_id and route.tool_id != self.request.preferred_tool_id:
             raise ValueError("不能更换用户本轮限定的工具")
-        if route.tool_id.startswith("video."):
-            source = route.input_bindings[0].asset_id
+        if route.tool_id in VIDEO_MODES:
             roles = self.request.image_roles
-            explicit_first = next((aid for aid, role in roles.items() if role == "first_frame"), None)
-            if roles.get(source, "auto") not in ("auto", "first_frame") or (
-                explicit_first and source != explicit_first
+            for ref in route.input_bindings:
+                explicit = roles.get(ref.asset_id, "auto")
+                inferred = ref.purpose if ref.purpose != "auto" else explicit
+                purpose = input_purpose(route.tool_id, ref.slot, inferred)
+                if route.task_mode == "video_ref2va" and purpose not in REFERENCE_PURPOSES:
+                    raise ValueError("参考生成须为每张图明确人物、风格、环境或构图用途")
+                if explicit != "auto" and explicit != purpose:
+                    raise ValueError("不能改变用户明确指定的素材用途；请选择符合用途的生成模式")
+                if inferred != "auto" and inferred != purpose:
+                    raise ValueError("参考与关键帧用途不匹配，请重新选择生成模式")
+                ref.purpose = purpose
+            bound = {ref.asset_id for ref in route.input_bindings}
+            if any(
+                role in REFERENCE_PURPOSES | {"first_frame", "last_frame"} and aid not in bound
+                for aid, role in roles.items()
             ):
-                message = self.goals.ask(route, "这张图片被明确指定为参考，不能直接充当整张视频首帧。")
-                return RouterResult(kind="clarify", message_zh=message, visual_observations=route.visual_observations)
+                raise ValueError("不能遗漏用户明确指定的视觉参考或关键帧")
         if self.request.revise_plan:
             if route.based_on_plan_id != self.request.revise_plan.plan_id:
                 raise ValueError("明确调整此方案时必须关联该方案，不能另起方案身份")
@@ -326,17 +365,11 @@ class GuidedFlow:
         # Parse the requested values now, so illegal settings can be repaired in routing.
         self.resolve_settings(route)
         issue = await self.policy.validate_intent(route)
-        shot = route.creative_brief.shot_intent
-        if issue and not (self.goals.direct and shot and shot.scene.policy == "plain" and shot.mode != "uncertain"):
-            if shot and shot.mode != "uncertain":
-                issue = self.goals.ask(route, issue)
+        if issue:
             return RouterResult(kind="clarify", message_zh=issue, visual_observations=route.visual_observations)
-        if not issue and route.tool_id.startswith("video.") and route.frame_assessment is not None:
+        if route.task_mode in ("video_i2va", "video_fl2va") and route.frame_assessment is not None:
             if route.input_bindings[0].asset_id in {image.metadata["asset_id"] for image in self.images}:
                 issue = self.policy.frame_issue(route, route.frame_assessment)
-        if issue and not (route.tool_id.startswith("video.") and self.goals.direct):
-            issue = self.goals.ask(route, issue)
-            return RouterResult(kind="clarify", message_zh=issue, visual_observations=route.visual_observations)
         if issue and self.goals.goal:
             self.goals.goal["warnings_zh"] = [issue]
         return route
@@ -374,8 +407,11 @@ class GuidedFlow:
         )
         parsed = PARAMETER_MODELS[route.tool_id].model_validate({**required_text, **values}).model_dump()
         if route.tool_id.startswith("video."):
-            asset = next(a for a in self.context["assets"] if a["id"] == route.input_bindings[0].asset_id)
-            parsed.update(self.p.registry.resolve_video(parsed, asset["media_info"], self.p.settings))
+            assets = {
+                ref.slot: next(a for a in self.context["assets"] if a["id"] == ref.asset_id)
+                for ref in route.input_bindings
+            }
+            parsed.update(self.p.registry.resolve_video(parsed, source_info(route.tool_id, assets), self.p.settings))
         return parsed
 
     def validate_deferred_parameters(self, route):
@@ -412,6 +448,131 @@ class GuidedFlow:
                     keys.add(key)
         brief.assumptions_zh = list(dict.fromkeys(brief.assumptions_zh + supplied.assumptions_zh))
         return CreativeBrief.model_validate(brief.model_dump())
+
+    async def prepare_continuation(self, route, outcome):
+        """Freeze both operations before asking the user to confirm the complete video task."""
+        if outcome.operation["candidate_count"] != 1:
+            raise ValueError("内部画面准备只能生成一个确定的输入，不创建多候选分支")
+        video_id = route.video_continuation.tool_id
+        tool = self.p.registry.get(video_id)
+        guide = self.p.guides.get(video_id, tool["version"])
+        assets = {item["id"]: item for item in self.context["assets"]}
+        _, _, dimensions = self.p.registry.normalize(
+            route.tool_id,
+            outcome.operation["parameters"],
+            {ref.slot: assets[ref.asset_id] for ref in route.input_bindings},
+            self.p.settings,
+        )
+        planned_asset = {"media_type": "image", "media_info": dimensions}
+        brief = route.creative_brief.model_copy(deep=True)
+        brief.requested_parameters = brief.deferred_parameters.pop(video_id, {})
+        resolved = PARAMETER_MODELS[video_id].model_validate({"prompt": "_", **brief.requested_parameters}).model_dump()
+        resolved.update(self.p.registry.resolve_video(resolved, dimensions, self.p.settings))
+        future_route = RouterResult(
+            kind="route",
+            message_zh="为同一视频任务准备后续动作。",
+            tool_id=video_id,
+            task_mode=TOOL_MODES[video_id],
+            creative_brief=brief,
+            selection_reason_zh=route.video_continuation.reason_zh,
+        )
+        bindings = [dict(slot="source_image", asset_id=None, from_step=0, purpose="first_frame", label="<Picture 1>")]
+        card = next(card for card in self.context["tools"] if card["id"] == video_id)
+        pending_step = (self.context.get("pending_plan") or {}).get("prompt_metadata") or {}
+        previous = pending_step.get("continuation") or {}
+        previous_params = previous.get("parameters") or {}
+
+        def build(context, repair=None):
+            selected = {k: v for k, v in context.items() if k != "tools" and not k.startswith("_")}
+            selected.update(
+                selected_tool=card,
+                route=future_route.model_dump(),
+                resolved_execution_settings=resolved,
+                asset_binding_map=bindings,
+                guide_examples=guide["examples"],
+                video_goal=self.goals.goal,
+                planned_input=dict(
+                    from_step=0,
+                    instruction=outcome.operation["parameters"].get("instruction")
+                    or outcome.operation["parameters"].get("prompt"),
+                    expected_media_info=dimensions,
+                    status="not_generated",
+                    original_images_are_references=True,
+                ),
+            )
+            return self.model_request(
+                COMPOSITION_SYSTEM + "\n\n" + guide["text"],
+                selected,
+                composition_model(video_id).model_json_schema(),
+                "guided_composition",
+                8192,
+                repair,
+            )
+
+        async def validate(composition):
+            observations = self.visual_records(composition)
+            if composition.kind != "propose":
+                if self.goals.goal:
+                    self.goals.goal.update(state="awaiting_clarification", available_actions=[])
+                return GuidedOutcome("clarify", composition.message_zh, observations, metadata=self.goals.metadata())
+            if composition.task_mode != "video_i2va" or composition.candidate_count != 1:
+                raise ValueError("后续步骤必须为单一首帧视频，不改变已确定的生成路径")
+            if composition.frame_assessment is not None:
+                raise ValueError("内部起始画面尚未生成，不能填写其像素评估")
+            if composition.constraint_review.conflicts:
+                raise ValueError("存在未解决的创作冲突，应集中澄清整项任务")
+            composition.creative_brief = self.inherit_brief(brief, composition.creative_brief)
+            await self.policy.ground_constraints(composition.creative_brief, composition.visual_observations)
+            self.validate_literals(composition.creative_brief)
+            self.policy.validate_shot_review(future_route, composition.shot_review)
+            params = {k: v for k, v in resolved.items() if k in composition.parameters.model_fields}
+            supplied = composition.parameters.model_dump(exclude_unset=True)
+            if any(supplied.get(k, params[k]) != params[k] for k in params if k != "seed"):
+                raise ValueError("后续视频时长、面积和比例已冻结，不能改变")
+            params.update(supplied)
+            if self.request.revise_plan and self.request.revise_plan.rewrite_only and previous_params:
+                if composition.seed_policy == "new":
+                    raise ValueError("仅改写整项任务不能更换后续视频种子")
+                params["seed"] = previous_params["seed"]
+            elif brief.requested_parameters.get("seed") is not None:
+                if params.get("seed") != brief.requested_parameters["seed"]:
+                    raise ValueError("不能改变明确指定的视频种子")
+            else:
+                params["seed"] = None
+            values, sections = compile_document(
+                video_id, composition.prompt_document, composition.creative_brief, resolved, bindings
+            )
+            params.update(values)
+            params, _, _ = self.p.registry.normalize(
+                video_id,
+                params,
+                {"source_image": planned_asset},
+                self.p.settings,
+            )
+            metadata = generation_metadata(guide, future_route, composition, bindings, params, sections)
+            metadata["task_goal"] = {**self.goals.goal, "current_step": "generate_video"}
+            outcome.metadata["continuation"] = dict(
+                version=1,
+                reason_zh=route.video_continuation.reason_zh,
+                tool_id=video_id,
+                tool_version=tool["version"],
+                template_hash=tool["template_hash"],
+                parameters=params,
+                input_slot="source_image",
+                from_step=0,
+                prompt_metadata=metadata,
+            )
+            outcome.metadata["execution_steps"] = [
+                dict(index=0, label="准备起始画面", tool_id=route.tool_id),
+                dict(index=1, label="生成视频", tool_id=video_id),
+            ]
+            outcome.metadata["creative_summary_zh"] = composition.creative_summary_zh
+            outcome.message = composition.message_zh
+            return outcome
+
+        return await self.run_stage(
+            "composing", composition_model(video_id), build, validate, purpose="continuation_composition"
+        )
 
     async def run(self):
         pending = self.context.get("pending_plan")
@@ -455,8 +616,24 @@ class GuidedFlow:
                 task_mode=TOOL_MODES[pending["tool_id"]],
                 selection_reason_zh="沿用明确指定的当前方案工具",
                 creative_brief=brief,
-                input_bindings=[RouteInput(**ref) for ref in pending["inputs"]],
+                input_bindings=[
+                    RouteInput(
+                        **ref,
+                        purpose=next(
+                            (
+                                b.get("purpose", "auto")
+                                for b in pending["prompt_metadata"].get("asset_binding_map", [])
+                                if b["slot"] == ref["slot"]
+                            ),
+                            "auto",
+                        ),
+                    )
+                    for ref in pending["inputs"]
+                ],
                 based_on_plan_id=pending["id"],
+                video_continuation=VideoContinuation(reason_zh=pending["prompt_metadata"]["continuation"]["reason_zh"])
+                if pending["prompt_metadata"].get("continuation")
+                else None,
             )
             # Observations are generated by the composer; this deterministic path has no model observations.
             for ref in route.input_bindings:
@@ -496,10 +673,10 @@ class GuidedFlow:
                 "blob_id": next(
                     image.metadata["blob_id"] for image in self.images if image.metadata["asset_id"] == ref.asset_id
                 ),
-                "purpose": self.request.image_roles.get(ref.asset_id, "auto"),
-                "label": "<Picture 1>" if route.task_mode == "video_i2va" else None,
+                "purpose": ref.purpose if ref.purpose != "auto" else self.request.image_roles.get(ref.asset_id, "auto"),
+                "label": f"<Picture {index}>" if route.tool_id in VIDEO_MODES else None,
             }
-            for ref in route.input_bindings
+            for index, ref in enumerate(route.input_bindings, 1)
         ]
         async with self.p.db.transaction() as session:
             message = await session.get(Message, self.user_message_id)
@@ -520,7 +697,6 @@ class GuidedFlow:
                 asset_binding_map=bindings,
                 guide_examples=guide["examples"],
                 video_goal=self.goals.goal,
-                direct_video_approved=self.goals.direct,
             )
             return self.model_request(
                 COMPOSITION_SYSTEM + "\n\n" + guide["text"],
@@ -546,12 +722,8 @@ class GuidedFlow:
             composition.creative_brief = brief
             await self.policy.ground_constraints(brief, composition.visual_observations)
             self.validate_literals(brief)
-            if route.tool_id.startswith("video."):
+            if route.task_mode in ("video_i2va", "video_fl2va"):
                 issue = self.policy.frame_issue(route, composition.frame_assessment)
-                if issue and not self.goals.direct:
-                    return GuidedOutcome(
-                        "clarify", self.goals.ask(route, issue), observations, metadata=self.goals.metadata(route)
-                    )
                 if issue and self.goals.goal:
                     self.goals.goal["warnings_zh"] = list(
                         dict.fromkeys(self.goals.goal.get("warnings_zh", []) + [issue])
@@ -572,7 +744,7 @@ class GuidedFlow:
                 params.get(key) != resolved[key] for key in route.creative_brief.requested_parameters if key != "seed"
             ):
                 raise ValueError("提示词编写改变了用户明确指定的执行参数")
-            if route.task_mode == "video_i2va":
+            if route.tool_id in VIDEO_MODES:
                 if any(params[k] != resolved[k] for k in ("duration_seconds", "megapixels", "aspect_ratio")):
                     raise ValueError("视频时长、面积和比例已在编写前冻结，不能改变")
             if self.request.revise_plan and self.request.revise_plan.rewrite_only:
@@ -630,6 +802,8 @@ class GuidedFlow:
             )
 
         outcome = await self.run_stage("composing", model, build, validate)
+        if outcome.operation and route.video_continuation:
+            outcome = await self.prepare_continuation(route, outcome)
         if outcome.metadata:
             async with self.p.db.session() as session:
                 calls = (

@@ -102,6 +102,14 @@ class VideoParams(StrictModel):
     seed: int | None = Field(default=None, ge=0, le=9007199254740991)
 
 
+class TextVideoParams(VideoParams):
+    aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
+
+
+class ReferenceVideoParams(TextVideoParams):
+    ref_image_size: Literal["match", "max"] = "match"
+
+
 PARAMETER_MODELS = {
     "image.generate.zimage": GenerateParams,
     "image.generate.qwen": QwenGenerateParams,
@@ -109,6 +117,10 @@ PARAMETER_MODELS = {
     "image.edit.qwen.reference": ReferenceParams,
     "image.upscale.seedvr2": UpscaleParams,
     "video.generate.minimax_i2v": VideoParams,
+    "video.generate.minimax_t2v": TextVideoParams,
+    "video.generate.minimax_ref2v": ReferenceVideoParams,
+    "video.generate.minimax_fl2v": VideoParams,
+    "video.generate.minimax_l2v": VideoParams,
 }
 
 
@@ -136,7 +148,16 @@ class MessageRequest(StrictModel):
     selected_asset_ids: list[str] = Field(default_factory=list, max_length=30)
     image_roles: dict[
         str,
-        Literal["auto", "edit_source", "subject_reference", "style_reference", "composition_reference", "first_frame"],
+        Literal[
+            "auto",
+            "edit_source",
+            "subject_reference",
+            "style_reference",
+            "scene_reference",
+            "composition_reference",
+            "first_frame",
+            "last_frame",
+        ],
     ] = Field(default_factory=dict, max_length=30)
     idempotency_key: str = Field(min_length=8, max_length=120)
     conversation_id: str | None = None
@@ -152,4 +173,6 @@ class MessageRequest(StrictModel):
             raise ValueError("图片用途只能设置给本轮选中的素材")
         if sum(role == "first_frame" for role in self.image_roles.values()) > 1:
             raise ValueError("一次只能指定一张视频首帧")
+        if sum(role == "last_frame" for role in self.image_roles.values()) > 1:
+            raise ValueError("一次只能指定一张视频尾帧")
         return self

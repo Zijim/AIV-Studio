@@ -11,20 +11,14 @@ export function CreativeSummary({ plan }: { plan: Data }) {
     <div className="creative-summary">
       {meta.task_goal?.output_kind === "video" && (
         <div className="video-goal">
-          <strong>
-            {meta.task_goal.current_step === "prepare_first_frame"
-              ? "视频任务 · 第 1 步：准备首帧"
-              : "视频任务 · 生成视频"}
-          </strong>
+          <strong>视频任务</strong>
           <p>{meta.task_goal.description_zh}</p>
-          {meta.task_goal.current_step === "prepare_first_frame" && (
-            <small>
-              本次执行生成图片；完成并查看首帧后，可继续准备视频方案。
-            </small>
+          {meta.continuation && (
+            <small>确认后自动完成起始画面准备与视频生成，无需逐步确认。</small>
           )}
           {!!meta.task_goal.warnings_zh?.length && (
             <details>
-              <summary>首帧效果提示</summary>
+              <summary>生成效果提示</summary>
               {meta.task_goal.warnings_zh.map(
                 (warning: string, index: number) => (
                   <p key={index}>{warning}</p>
@@ -35,7 +29,10 @@ export function CreativeSummary({ plan }: { plan: Data }) {
         </div>
       )}
       {meta.selection_reason_zh && (
-        <p className="tool-selection-reason">{meta.selection_reason_zh}</p>
+        <details>
+          <summary>生成方式</summary>
+          <p>{meta.selection_reason_zh}</p>
+        </details>
       )}
       {meta.creative_summary_zh && <p>{meta.creative_summary_zh}</p>}
       {meta.shot_intent && (
@@ -125,12 +122,23 @@ export function PlanInputs({ plan, tools }: { plan: Data; tools: Data[] }) {
     <div className="guided-inputs">
       {plan.inputs.map((input: Data) => {
         const asset = assets.data?.find((a) => a.id === input.asset_id);
-        const label = plan.tool_id.startsWith("video.")
-          ? "视频首帧"
-          : (tools
-              .find((t) => t.id === plan.tool_id)
-              ?.inputs.find((i: Data) => i.slot === input.slot)?.label ??
-            input.slot);
+        const purpose = plan.prompt_metadata?.asset_binding_map?.find(
+          (binding: Data) => binding.slot === input.slot,
+        )?.purpose;
+        const labels: Record<string, string> = {
+          subject_reference: "人物 / 主体参考",
+          style_reference: "风格参考",
+          scene_reference: "环境参考",
+          composition_reference: "构图参考",
+          first_frame: "开场画面",
+          last_frame: "结束画面",
+        };
+        const label =
+          labels[purpose] ??
+          tools
+            .find((t) => t.id === plan.tool_id)
+            ?.inputs.find((i: Data) => i.slot === input.slot)?.label ??
+          input.slot;
         return (
           <div className="guided-input" key={input.slot}>
             <img
@@ -154,9 +162,11 @@ export function PlanInputs({ plan, tools }: { plan: Data; tools: Data[] }) {
 export function PromptDetails({
   plan,
   onError,
+  title,
 }: {
   plan: Data;
   onError: (text: string) => void;
+  title?: string;
 }) {
   const [copied, setCopied] = useState(false);
   const meta = plan.prompt_metadata;
@@ -179,11 +189,14 @@ export function PromptDetails({
     scale: "放大倍率",
     resolution: "目标分辨率",
     max_resolution: "最长边上限",
+    ref_image_size: "参考细节",
   };
   const parameterValues: Record<string, string> = {
     source: "保持原图比例",
     fast: "快速",
     quality: "质量",
+    match: "标准",
+    max: "高参考细节",
   };
   const parameters = Object.entries(plan.parameters).filter(
     ([name]) =>
@@ -199,7 +212,12 @@ export function PromptDetails({
   }
   return (
     <details className="guided-prompt">
-      <summary>完整提示词与参数</summary>
+      <summary>
+        {title ??
+          (meta?.continuation
+            ? "起始画面提示词与任务参数"
+            : "完整提示词与参数")}
+      </summary>
       <div className="prompt-toolbar">
         <span className={`prompt-origin ${guided ? "validated" : ""}`}>
           {guided ? <FileCheck2 size={12} /> : <PencilLine size={12} />}
@@ -265,6 +283,18 @@ export function PromptDetails({
             <small>已保留原指引来源；手动文本未按该指引重新验证。</small>
           )}
         </details>
+      )}
+      {meta?.continuation && (
+        <PromptDetails
+          title="视频生成提示词与参数"
+          plan={{
+            ...plan,
+            parameters: meta.continuation.parameters,
+            seed_list: [meta.continuation.parameters.seed],
+            prompt_metadata: meta.continuation.prompt_metadata,
+          }}
+          onError={onError}
+        />
       )}
     </details>
   );

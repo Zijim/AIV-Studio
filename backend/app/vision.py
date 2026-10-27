@@ -54,8 +54,10 @@ IMAGE_ROLES = {
     "edit_source": "待编辑原图",
     "subject_reference": "主体参考，不代表视频首帧",
     "style_reference": "风格参考，不代表视频首帧",
+    "scene_reference": "环境参考，不代表视频首帧",
     "composition_reference": "构图参考，不代表视频首帧",
     "first_frame": "视频首帧，生成将从这张画面开始",
+    "last_frame": "视频尾帧，生成将在这张画面结束",
 }
 
 

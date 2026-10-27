@@ -1,0 +1,1 @@
+文生视频：从文字构建人物、环境、光照和动作完整时间线。不要索取首帧，不输出Picture/Subject等素材引用标签或图片对齐指令。prompt_document使用shots、overall_soundscape、non_diegetic_music。frame_assessment为null。未指定环境时保守补全与目标相容的具体场景，标为建议；不逐项追问。

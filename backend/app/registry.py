@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from .errors import AppError
 from .schemas import PARAMETER_MODELS
+from .video_modes import check_input_slots, source_info
 
 
 class Registry:
@@ -95,6 +96,8 @@ class Registry:
 
     @staticmethod
     def resolve_video(params, info, settings):
+        if params["aspect_ratio"] == "source" and not info:
+            raise AppError("invalid_parameters", "此模式没有画面锚点，请明确视频比例。")
         ratio = (
             info["width"] / info["height"]
             if params["aspect_ratio"] == "source"
@@ -123,9 +126,10 @@ class Registry:
                 "工具参数不符合要求。",
                 details={"errors": exc.errors(include_url=False, include_context=False)},
             ) from exc
-        expected = {item["slot"] for item in tool["inputs"]}
-        if set(assets) != expected:
-            raise AppError("input_slots", "请为工具指定正确的输入素材。", details={"required_slots": sorted(expected)})
+        try:
+            check_input_slots(tool, assets)
+        except ValueError as exc:
+            raise AppError("input_slots", str(exc)) from exc
         for slot, asset in assets.items():
             if asset["media_type"] != "image" or not asset["media_info"].get("width"):
                 raise AppError("input_type", f"{slot}需要一张可读取的图片。")
@@ -166,7 +170,7 @@ class Registry:
             params.update(resolution=resolution, max_resolution=settings.upscale_max_edge)
             dimensions = dict(width=round(width * params["scale"]), height=round(height * params["scale"]))
         elif tool["category"] == "video":
-            info = assets["source_image"]["media_info"]
+            info = source_info(tool_id, assets)
             params.update(self.resolve_video(params, info, settings))
             width, height, frames = params["width"], params["height"], params["resolved_frames"]
             dimensions = dict(
@@ -174,7 +178,11 @@ class Registry:
                 height=height,
                 frames=frames,
                 duration=frames / 24,
-                stretched=params["aspect_ratio"] != "source",
+                stretched=bool(
+                    info
+                    and (width / height != info["width"] / info["height"])
+                    and tool_id != "video.generate.minimax_l2v"
+                ),
             )
         max_seed = 4294967295 if tool["category"] == "upscale" else 9007199254740991
         seed = params.get("seed")
@@ -191,7 +199,13 @@ class Registry:
         for key, (node, field) in tool["bindings"].items():
             api[node]["inputs"][field] = params[key]
         for key, (node, field) in tool.get("input_bindings", {}).items():
-            api[node]["inputs"][field] = uploads[key]
+            if key in uploads:
+                api[node]["inputs"][field] = uploads[key]
+            else:
+                # Optional references must not leave placeholder LoadImage nodes or live wires behind.
+                api.pop(node, None)
+                for target, input_name in tool.get("optional_connections", {}).get(key, []):
+                    api[target]["inputs"].pop(input_name, None)
         if tool_id == "image.generate.qwen":
             api["11"]["inputs"]["value"] = params["preset"] == "fast"
         for node in tool["prefixes"]:

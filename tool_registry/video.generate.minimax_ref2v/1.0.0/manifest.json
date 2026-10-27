@@ -1,0 +1,302 @@
+{
+  "id": "video.generate.minimax_ref2v",
+  "name": "参考生成视频",
+  "subtitle": "MiniMax H3 · 本地",
+  "category": "video",
+  "source": "MiniMax_H3_Ref2VA.json",
+  "inputs": [
+    {
+      "slot": "reference_image_1",
+      "label": "参考图 1",
+      "media_type": "image",
+      "required": true
+    },
+    {
+      "slot": "reference_image_2",
+      "label": "参考图 2",
+      "media_type": "image",
+      "required": false
+    },
+    {
+      "slot": "reference_image_3",
+      "label": "参考图 3",
+      "media_type": "image",
+      "required": false
+    },
+    {
+      "slot": "reference_image_4",
+      "label": "参考图 4",
+      "media_type": "image",
+      "required": false
+    },
+    {
+      "slot": "reference_image_5",
+      "label": "参考图 5",
+      "media_type": "image",
+      "required": false
+    },
+    {
+      "slot": "reference_image_6",
+      "label": "参考图 6",
+      "media_type": "image",
+      "required": false
+    },
+    {
+      "slot": "reference_image_7",
+      "label": "参考图 7",
+      "media_type": "image",
+      "required": false
+    },
+    {
+      "slot": "reference_image_8",
+      "label": "参考图 8",
+      "media_type": "image",
+      "required": false
+    },
+    {
+      "slot": "reference_image_9",
+      "label": "参考图 9",
+      "media_type": "image",
+      "required": false
+    }
+  ],
+  "fields": [
+    {
+      "name": "prompt",
+      "label": "创作描述",
+      "type": "textarea",
+      "default": "",
+      "required": true
+    },
+    {
+      "name": "duration_seconds",
+      "label": "请求时长（秒）",
+      "type": "number",
+      "default": 5,
+      "min": 1,
+      "max": 10,
+      "step": 1
+    },
+    {
+      "name": "megapixels",
+      "label": "目标像素（MP）",
+      "type": "number",
+      "default": 0.4,
+      "min": 0.1,
+      "max": 0.6,
+      "step": 0.1
+    },
+    {
+      "name": "aspect_ratio",
+      "label": "画面比例",
+      "type": "select",
+      "default": "16:9",
+      "options": [
+        {
+          "value": "16:9",
+          "label": "16:9"
+        },
+        {
+          "value": "9:16",
+          "label": "9:16"
+        },
+        {
+          "value": "1:1",
+          "label": "1:1"
+        }
+      ]
+    },
+    {
+      "name": "ref_image_size",
+      "label": "参考细节",
+      "type": "select",
+      "default": "match",
+      "options": [
+        {
+          "value": "match",
+          "label": "标准"
+        },
+        {
+          "value": "max",
+          "label": "高参考细节 · 较慢"
+        }
+      ]
+    },
+    {
+      "name": "seed",
+      "label": "随机种子",
+      "type": "seed",
+      "default": null
+    }
+  ],
+  "defaults": {},
+  "bindings": {
+    "prompt": [
+      "105:104",
+      "prompt"
+    ],
+    "width": [
+      "105:104",
+      "width"
+    ],
+    "height": [
+      "105:104",
+      "height"
+    ],
+    "duration_seconds": [
+      "105:111",
+      "value"
+    ],
+    "seed": [
+      "105:15",
+      "noise_seed"
+    ],
+    "ref_image_size": [
+      "105:104",
+      "ref_image_size"
+    ]
+  },
+  "input_bindings": {
+    "reference_image_1": [
+      "114",
+      "image"
+    ],
+    "reference_image_2": [
+      "115",
+      "image"
+    ],
+    "reference_image_3": [
+      "116",
+      "image"
+    ],
+    "reference_image_4": [
+      "117",
+      "image"
+    ],
+    "reference_image_5": [
+      "118",
+      "image"
+    ],
+    "reference_image_6": [
+      "119",
+      "image"
+    ],
+    "reference_image_7": [
+      "120",
+      "image"
+    ],
+    "reference_image_8": [
+      "121",
+      "image"
+    ],
+    "reference_image_9": [
+      "122",
+      "image"
+    ]
+  },
+  "prefixes": [
+    "92"
+  ],
+  "roles": {
+    "92": "final"
+  },
+  "changes": [
+    "Reuse the validated local H3 sampling/decode graph; bind conditioning according to the live core node schema.",
+    "Text/reference modes choose the output canvas independently of reference-image geometry."
+  ],
+  "version": "1.0.0",
+  "local_only": true,
+  "source_hash": "6b98d83eb697a005dc1350c88ab6de076687c6ef5e8fd944a8098b29076b7cb1",
+  "template_hash": "9a15181794e20ca5d05b6ef4346cc4fd5e3d46007ccc4fb4d19d0f23f316c469",
+  "required_node_types": [
+    "BasicGuider",
+    "BasicScheduler",
+    "CLIPLoader",
+    "ComfyMathExpression",
+    "CreateVideo",
+    "KSamplerSelect",
+    "LoadImage",
+    "MiniMaxH3ReferenceToVideo",
+    "PrimitiveFloat",
+    "RandomNoise",
+    "SamplerCustomAdvanced",
+    "SaveVideo",
+    "UNETLoader",
+    "VAEDecode",
+    "VAEDecodeAudio",
+    "VAELoader"
+  ],
+  "required_models": [
+    {
+      "node_type": "VAELoader",
+      "field": "vae_name",
+      "value": "minimax_h3_video_vae_fp16.safetensors"
+    },
+    {
+      "node_type": "VAELoader",
+      "field": "vae_name",
+      "value": "minimax_h3_audio_vae_fp32.safetensors"
+    },
+    {
+      "node_type": "UNETLoader",
+      "field": "unet_name",
+      "value": "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+    },
+    {
+      "node_type": "CLIPLoader",
+      "field": "clip_name",
+      "value": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+    }
+  ],
+  "task_mode": "video_ref2va",
+  "optional_connections": {
+    "reference_image_2": [
+      [
+        "105:104",
+        "ref_images.ref_image_1"
+      ]
+    ],
+    "reference_image_3": [
+      [
+        "105:104",
+        "ref_images.ref_image_2"
+      ]
+    ],
+    "reference_image_4": [
+      [
+        "105:104",
+        "ref_images.ref_image_3"
+      ]
+    ],
+    "reference_image_5": [
+      [
+        "105:104",
+        "ref_images.ref_image_4"
+      ]
+    ],
+    "reference_image_6": [
+      [
+        "105:104",
+        "ref_images.ref_image_5"
+      ]
+    ],
+    "reference_image_7": [
+      [
+        "105:104",
+        "ref_images.ref_image_6"
+      ]
+    ],
+    "reference_image_8": [
+      [
+        "105:104",
+        "ref_images.ref_image_7"
+      ]
+    ],
+    "reference_image_9": [
+      [
+        "105:104",
+        "ref_images.ref_image_8"
+      ]
+    ]
+  }
+}

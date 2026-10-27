@@ -69,9 +69,9 @@ class PlanService:
         values = dict(request.parameters)
         derived = {
             "image.upscale.seedvr2": ("resolution", "max_resolution"),
-            "video.generate.minimax_i2v": ("width", "height", "resolved_frames", "resolved_seconds"),
         }
-        for key in derived.get(tool["id"], ()):
+        computed = ("width", "height", "resolved_frames", "resolved_seconds") if tool["category"] == "video" else ()
+        for key in (*derived.get(tool["id"], ()), *computed):
             values.pop(key, None)
         async with self.db.transaction() as session:
             project = await require_project(session, project_id, writable=True)
@@ -119,6 +119,10 @@ class PlanService:
                 tool["id"], values, assets, self.settings, request.candidate_count
             )
             if prompt_metadata is None and latest and latest.prompt_metadata:
+                if latest.prompt_metadata.get("continuation"):
+                    raise AppError(
+                        "compound_plan_edit", "请通过对话修改整项视频任务，助手会同步更新起始画面和视频。", 409
+                    )
                 prompt_metadata = deepcopy(latest.prompt_metadata)
                 text_keys = ("prompt", "instruction", "negative_prompt")
                 text_changed = any(params.get(k) != latest.parameters.get(k) for k in text_keys)
@@ -152,6 +156,18 @@ class PlanService:
                         **goal.get("video_parameters", {}),
                         **{key: params[key] for key in ("duration_seconds", "megapixels", "aspect_ratio")},
                     }
+            if prompt_metadata and prompt_metadata.get("continuation"):
+                step = prompt_metadata["continuation"]
+                followup = self.registry.get(step["tool_id"], step["tool_version"])
+                if (
+                    not tool["id"].startswith(("image.generate.", "image.edit."))
+                    or request.candidate_count != 1
+                    or step["tool_id"] != "video.generate.minimax_i2v"
+                    or step.get("from_step") != 0
+                    or step.get("input_slot") != "source_image"
+                    or step["template_hash"] != followup["template_hash"]
+                ):
+                    raise AppError("pipeline_invalid", "视频任务的内部步骤或工具版本不一致。", 409)
             revision = 1
             if plan_id:
                 if latest.revision != expected_revision:
@@ -167,6 +183,8 @@ class PlanService:
                 else:
                     turn_id, context_id, origin = latest.turn_id, latest.context_id, latest.origin
             plan_id = plan_id or uid()
+            if prompt_metadata and prompt_metadata.get("task_goal"):
+                prompt_metadata["task_goal"].update(plan_id=plan_id, plan_revision=revision)
             context_revision = project.revision
             if context_id and (not expected_revision or replace_owner):
                 context = await session.get(ContextSnapshot, context_id)
@@ -255,8 +273,16 @@ class PlanService:
                 raise AppError("await_feedback", "当前对话已有执行中的任务，请等待完成后继续。", 409)
             if project.revision != plan.project_revision and not request.accept_previous_context:
                 raise AppError("context_stale", "项目背景已修改。请更新方案，或明确采用旧背景。", 409)
-            if self.registry.get(plan.tool_id)["availability"] != "available":
+            if self.registry.get(plan.tool_id, plan.tool_version)["availability"] != "available":
                 raise AppError("tool_unavailable", "工具当前不可用，请检查ComfyUI连接和工具状态。", 409)
+            continuation = (plan.prompt_metadata or {}).get("continuation")
+            if continuation:
+                followup = self.registry.get(continuation["tool_id"], continuation["tool_version"])
+                if (
+                    followup["availability"] != "available"
+                    or followup["template_hash"] != continuation["template_hash"]
+                ):
+                    raise AppError("tool_unavailable", "视频生成步骤当前不可用，请检查工具状态。", 409)
             self.storage.check_space()
             count = await session.scalar(select(func.count()).select_from(Task).where(Task.state.in_(ACTIVE_TASKS)))
             if count >= self.settings.max_outstanding_tasks:
@@ -294,8 +320,10 @@ class PlanService:
                         session, conversation.id, {**goal, "state": "executing", "active_task_id": task.id}
                     )
             for index, seed in enumerate(plan.seed_list):
+                execution_id = uid()
                 session.add(
                     Execution(
+                        id=execution_id,
                         task_id=task.id,
                         candidate_index=index,
                         client_id=self.client_id,
@@ -309,11 +337,39 @@ class PlanService:
                             "timeout_seconds": self.settings.video_timeout_seconds
                             if plan.tool_id.startswith("video.")
                             else self.settings.image_timeout_seconds,
-                            "template_hash": self.registry.get(plan.tool_id)["template_hash"],
+                            "template_hash": self.registry.get(plan.tool_id, plan.tool_version)["template_hash"],
                             "prompt_generation": plan.prompt_metadata,
+                            **(
+                                {"step_index": 0, "step_label": "准备起始画面", "step_count": 2} if continuation else {}
+                            ),
                         },
                     )
                 )
+                if continuation:
+                    session.add(
+                        Execution(
+                            task_id=task.id,
+                            candidate_index=1,
+                            client_id=self.client_id,
+                            tool_id=continuation["tool_id"],
+                            tool_version=continuation["tool_version"],
+                            seed=continuation["parameters"]["seed"],
+                            parameters=continuation["parameters"],
+                            inputs=[],
+                            execution_state="blocked",
+                            configuration={
+                                "comfy_url": self.settings.comfy_url,
+                                "timeout_seconds": self.settings.video_timeout_seconds,
+                                "template_hash": continuation["template_hash"],
+                                "prompt_generation": continuation["prompt_metadata"],
+                                "depends_on_execution_id": execution_id,
+                                "input_slot": continuation["input_slot"],
+                                "step_index": 1,
+                                "step_label": "生成视频",
+                                "step_count": 2,
+                            },
+                        )
+                    )
             plan.state = "consumed"
             if plan.turn_id:
                 turn = await session.get(AgentTurn, plan.turn_id)
@@ -324,7 +380,9 @@ class PlanService:
                     conversation_id=conversation.id,
                     turn_id=plan.turn_id,
                     role="system",
-                    content=f"已提交：{self.registry.get(plan.tool_id)['name']}，{plan.candidate_count}个候选。",
+                    content="已提交视频任务，起始画面准备完成后将自动生成视频。"
+                    if continuation
+                    else f"已提交：{self.registry.get(plan.tool_id)['name']}，{plan.candidate_count}个候选。",
                     task_id=task.id,
                 )
             )

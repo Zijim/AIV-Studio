@@ -1,0 +1,157 @@
+{
+  "id": "video.generate.minimax_l2v",
+  "name": "尾帧生成视频",
+  "subtitle": "MiniMax H3 · 本地",
+  "category": "video",
+  "source": "video_minimax_h3_i2v.json",
+  "inputs": [
+    {
+      "slot": "last_frame",
+      "label": "结束画面",
+      "media_type": "image",
+      "required": true
+    }
+  ],
+  "fields": [
+    {
+      "name": "prompt",
+      "label": "创作描述",
+      "type": "textarea",
+      "default": "",
+      "required": true
+    },
+    {
+      "name": "duration_seconds",
+      "label": "请求时长（秒）",
+      "type": "number",
+      "default": 5,
+      "min": 1,
+      "max": 10,
+      "step": 1
+    },
+    {
+      "name": "megapixels",
+      "label": "目标像素（MP）",
+      "type": "number",
+      "default": 0.4,
+      "min": 0.1,
+      "max": 0.6,
+      "step": 0.1
+    },
+    {
+      "name": "aspect_ratio",
+      "label": "画面比例",
+      "type": "select",
+      "default": "source",
+      "options": [
+        {
+          "value": "source",
+          "label": "跟随锚点画面"
+        },
+        {
+          "value": "16:9",
+          "label": "16:9"
+        },
+        {
+          "value": "9:16",
+          "label": "9:16"
+        },
+        {
+          "value": "1:1",
+          "label": "1:1"
+        }
+      ]
+    },
+    {
+      "name": "seed",
+      "label": "随机种子",
+      "type": "seed",
+      "default": null
+    }
+  ],
+  "defaults": {},
+  "bindings": {
+    "prompt": [
+      "105:104",
+      "prompt"
+    ],
+    "width": [
+      "105:104",
+      "width"
+    ],
+    "height": [
+      "105:104",
+      "height"
+    ],
+    "duration_seconds": [
+      "105:111",
+      "value"
+    ],
+    "seed": [
+      "105:15",
+      "noise_seed"
+    ]
+  },
+  "input_bindings": {
+    "last_frame": [
+      "114",
+      "image"
+    ]
+  },
+  "prefixes": [
+    "92"
+  ],
+  "roles": {
+    "92": "final"
+  },
+  "changes": [
+    "Reuse the validated local H3 sampling/decode graph; bind conditioning according to the live core node schema.",
+    "Text/reference modes choose the output canvas independently of reference-image geometry."
+  ],
+  "version": "1.0.0",
+  "local_only": true,
+  "source_hash": "7b3c294a10cfa3051e787f39c5e24956a49cd42b02bf4121db887d9d9628551b",
+  "template_hash": "bb13d297ca4cdec3b5b174f9f8abb9d28300b047689da6234d6bc0aac6bd97e1",
+  "required_node_types": [
+    "BasicGuider",
+    "BasicScheduler",
+    "CLIPLoader",
+    "ComfyMathExpression",
+    "CreateVideo",
+    "KSamplerSelect",
+    "LoadImage",
+    "MiniMaxH3ImageToVideo",
+    "PrimitiveFloat",
+    "RandomNoise",
+    "SamplerCustomAdvanced",
+    "SaveVideo",
+    "UNETLoader",
+    "VAEDecode",
+    "VAEDecodeAudio",
+    "VAELoader"
+  ],
+  "required_models": [
+    {
+      "node_type": "VAELoader",
+      "field": "vae_name",
+      "value": "minimax_h3_video_vae_fp16.safetensors"
+    },
+    {
+      "node_type": "VAELoader",
+      "field": "vae_name",
+      "value": "minimax_h3_audio_vae_fp32.safetensors"
+    },
+    {
+      "node_type": "UNETLoader",
+      "field": "unet_name",
+      "value": "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+    },
+    {
+      "node_type": "CLIPLoader",
+      "field": "clip_name",
+      "value": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+    }
+  ],
+  "task_mode": "video_l2va",
+  "optional_connections": {}
+}

@@ -7,7 +7,7 @@ from .prompt_guides import content_hash
 I2VA_INSTRUCTION = (
     "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced."
 )
-COMPILER_VERSION = "1.0.0"
+COMPILER_VERSION = "2.0.0"
 
 
 def compile_document(tool_id, document, brief, resolved, bindings):
@@ -85,15 +85,63 @@ def compile_document(tool_id, document, brief, resolved, bindings):
             {"label": "环境与动作声音", "text": document.overall_soundscape},
             {"label": "背景配乐", "text": document.non_diegetic_music},
         ]
-        values = {
-            "prompt": f"{I2VA_INSTRUCTION}\n\nintegrated_multimodal_description: {body}\n\noverall_soundscape: {document.overall_soundscape.strip()}\n\nnon_diegetic_music: {document.non_diegetic_music.strip()}"
-        }
+        sounds = (
+            f"overall_soundscape: {document.overall_soundscape.strip()}\n\n"
+            f"non_diegetic_music: {document.non_diegetic_music.strip()}"
+        )
+        if tool_id == "video.generate.minimax_ref2v":
+            labels = [item.label for item in document.subject_definitions]
+            if labels != [f"<Subject {i}>" for i in range(1, len(labels) + 1)]:
+                raise ValueError("Subject定义必须从1连续编号，不能重复")
+            if not document.summary.startswith("[reference generation]"):
+                raise ValueError("参考生成摘要须以[reference generation]开始，不能误作首帧补全")
+            definitions = "\n".join(
+                f"{item.label} is {item.description.strip()}" for item in document.subject_definitions
+            )
+            retention = "\n".join(document.retention_analysis)
+            prompt = (
+                f"subject_definitions:\n{definitions}\n\nsummary: {document.summary.strip()}\n\n"
+                f"retention_analysis:\n{retention}\n\ndetailed_description: "
+                f"{document.style_description.strip()}\n{body}\n\n{sounds}"
+            )
+            used_subjects = set(re.findall(r"<Subject\s+\d+>", prompt))
+            if not used_subjects <= set(labels):
+                raise ValueError("提示词引用了未定义的Subject")
+            sections = [
+                {"label": "参考内容定义", "text": definitions},
+                {"label": "参考生成摘要", "text": document.summary},
+                {"label": "参考保持范围", "text": retention},
+                {"label": "画面风格", "text": document.style_description},
+                *sections,
+            ]
+        else:
+            alignment = ""
+            last_time = (resolved["resolved_frames"] - 1) / 24
+            if tool_id == "video.generate.minimax_i2v":
+                alignment = I2VA_INSTRUCTION
+            elif tool_id == "video.generate.minimax_fl2v":
+                alignment = (
+                    "How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns "
+                    "with the 0.00-second mark of the target video; "
+                    f"Picture 2 (from Shot {len(shots)}) aligns with the {last_time:.2f}-second mark of the target video."
+                )
+            elif tool_id == "video.generate.minimax_l2v":
+                alignment = (
+                    f"How the reference pictures align with the target video — <Picture 1> (from [Shot {len(shots)}]) "
+                    f"aligns with the {last_time:.2f}-second mark of the target video."
+                )
+            prompt = f"integrated_multimodal_description: {body}\n\n{sounds}"
+            if alignment:
+                prompt = alignment + "\n\n" + prompt
+        values = {"prompt": prompt}
     text = values.get("prompt") or values.get("instruction") or ""
     allowed_labels = {binding["label"] for binding in bindings if binding.get("label")}
     used_labels = {f"<{kind} {number}>" for kind, number in re.findall(r"<(Picture|Video|Audio)\s+(\d+)>", text)}
     if not used_labels <= allowed_labels:
         raise ValueError("提示词引用了执行工具没有接收的图片/视频/音频标签")
-    if re.search(r"<Subject\s+\d+>", text):
+    if tool_id == "video.generate.minimax_ref2v" and used_labels != allowed_labels:
+        raise ValueError("每张执行参考图都必须在提示词中说明作用")
+    if tool_id != "video.generate.minimax_ref2v" and re.search(r"<Subject\s+\d+>", text):
         raise ValueError("当前工具不使用全参考Subject标签")
     for literal in brief.literal_texts:
         if literal.text not in text:
@@ -110,9 +158,7 @@ def generation_metadata(guide, route, composition, bindings, params, sections):
     assumptions = composition.creative_brief.assumptions_zh + composition.assumptions_zh
     deferred = composition.creative_brief.deferred_parameters.get("video.generate.minimax_i2v", {})
     if "duration_seconds" in deferred:
-        assumptions = assumptions + [
-            f"后续视频目标时长为{deferred['duration_seconds']}秒；本轮只准备图片方案，视频需要另行确认。"
-        ]
+        assumptions = assumptions + [f"视频目标时长为{deferred['duration_seconds']}秒；必要的画面准备作为内部步骤。"]
     return {
         "generation_origin": "agent_guided",
         "validation_status": "structure_validated",

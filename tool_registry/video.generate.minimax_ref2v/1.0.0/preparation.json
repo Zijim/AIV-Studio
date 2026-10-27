@@ -1,0 +1,9 @@
+{
+  "source": "F:\\ComfyUI\\ComfyUI_windows_portable\\ComfyUI\\user\\default\\workflows\\MiniMax_H3_Ref2VA.json",
+  "changes": [
+    "Reuse the validated local H3 sampling/decode graph; bind conditioning according to the live core node schema.",
+    "Text/reference modes choose the output canvas independently of reference-image geometry."
+  ],
+  "source_hash": "6b98d83eb697a005dc1350c88ab6de076687c6ef5e8fd944a8098b29076b7cb1",
+  "template_hash": "9a15181794e20ca5d05b6ef4346cc4fd5e3d46007ccc4fb4d19d0f23f316c469"
+}

@@ -3,8 +3,7 @@
 from sqlalchemy import func, select
 
 from .models import Message
-
-VIDEO_TOOL = "video.generate.minimax_i2v"
+from .video_modes import VIDEO_MODES
 
 
 class CreativePolicy:
@@ -68,7 +67,9 @@ class CreativePolicy:
 
     @staticmethod
     def needs_shot_design(route):
-        return route.tool_id == VIDEO_TOOL or VIDEO_TOOL in route.creative_brief.deferred_parameters
+        return route.tool_id in VIDEO_MODES or any(
+            tool in VIDEO_MODES for tool in route.creative_brief.deferred_parameters
+        )
 
     async def validate_intent(self, route):
         if not self.needs_shot_design(route):
@@ -93,15 +94,15 @@ class CreativePolicy:
             raise ValueError("镜头需要明确场景和光照；未指定时应给出可确认的具体场景建议")
         if scene.requires_surface and not scene.surface_zh.strip():
             raise ValueError("涉及接触的动作需要明确实际地面或接触面")
-        if scene.explicit_background and not await self.evidence_valid(scene.evidence, scene.source):
+        # The scene description can come from pixels while the instruction to preserve it comes from the user.
+        evidence_source = scene.source if scene.source in ("user", "project", "history") else "user"
+        if scene.explicit_background and not await self.evidence_valid(scene.evidence, evidence_source):
             raise ValueError("明确背景要求没有用户或项目原文依据")
         if scene.source == "observation":
             observed = {item.asset_id for item in route.visual_observations}
             scene.asset_id = scene.asset_id or (route.frame_assessment.asset_id if route.frame_assessment else None)
             if scene.asset_id not in observed:
                 raise ValueError("场景观察必须关联本阶段实际看到的输入图片")
-        if scene.policy == "plain" and not scene.explicit_background:
-            return "输入使用纯色背景，场景和动作衔接可能受到限制。可保留原图直接尝试，也可先准备带环境的首帧。"
         return None
 
     def frame_issue(self, route, assessment):
@@ -132,14 +133,14 @@ class CreativePolicy:
         if not reasons:
             return None
         detail = "；".join(reasons)
-        return f"根据当前图片判断，直接生成可能影响效果：{detail}。可先编辑首帧改善衔接；这是效果建议，不代表视频工具无法接收这张图片。"
+        return f"当前开场画面可能影响动作衔接：{detail}。"
 
     def validate_shot_review(self, route, review):
         if not self.needs_shot_design(route):
             return
         if review is None:
             raise ValueError("需要检查实际提示词是否落实主要动作、状态衔接和场景")
-        if route.tool_id == VIDEO_TOOL:
+        if route.tool_id in VIDEO_MODES:
             covered = review.main_action_present
         else:
             # A still starting frame must not already perform the entire future action.

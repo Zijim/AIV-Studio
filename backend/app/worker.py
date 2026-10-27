@@ -25,6 +25,7 @@ from .models import (
     record_event,
     row_dict,
 )
+from .schemas import PARAMETER_MODELS
 from .storage import atomic_json, file_hash
 
 log = logging.getLogger("aiv.worker")
@@ -523,6 +524,8 @@ class Worker:
                         tool_name=self.registry.get(execution.tool_id)["name"],
                         parameters=execution.parameters,
                         reference=artifact.reference,
+                        task_step=execution.configuration.get("step_label"),
+                        internal_preparation=execution.configuration.get("step_index") == 0,
                     )
                     description = (
                         execution.parameters.get("prompt") or execution.parameters.get("instruction") or "高清放大"
@@ -536,7 +539,7 @@ class Worker:
                         description=description,
                         source_info=source,
                         execution_id=execution_id,
-                        candidate_index=execution.candidate_index,
+                        candidate_index=0 if execution.configuration.get("step_count") else execution.candidate_index,
                         inputs=execution.inputs,
                         artifact_id=artifact.id,
                     )
@@ -569,6 +572,7 @@ class Worker:
                     if records or current.execution_state == "succeeded"
                     else "none"
                 )
+                current.configuration = {**current.configuration, "collection_attempted": True}
                 manifest = dict(
                     execution_id=execution_id,
                     storage_state=current.storage_state,
@@ -590,18 +594,90 @@ class Worker:
                     artifact = await session.scalar(select(Artifact).where(Artifact.asset_id == preview.id))
                     artifact.representation_of = final.id
 
+    async def advance_steps(self, session, task, executions):
+        by_id = {item.id: item for item in executions}
+        waiting_storage = False
+        for execution in executions:
+            if execution.execution_state != "blocked":
+                continue
+            parent = by_id.get(execution.configuration.get("depends_on_execution_id"))
+            if not parent:
+                execution.execution_state = "failed"
+                execution.error = {"code": "dependency_missing", "message": "缺少起始画面的执行记录。"}
+                continue
+            if task.cancel_requested or parent.execution_state in TERMINAL - {"succeeded"}:
+                execution.execution_state, execution.finished_at = "cancelled", now()
+                continue
+            if parent.execution_state != "succeeded":
+                continue
+            if parent.storage_state != "complete":
+                waiting_storage |= parent.storage_state in ("partial", "missing") or (
+                    parent.storage_state == "pending" and parent.configuration.get("collection_attempted", False)
+                )
+                continue
+            assets = list(
+                await session.scalars(
+                    select(Asset)
+                    .join(ProjectAsset, ProjectAsset.asset_id == Asset.id)
+                    .where(
+                        Asset.execution_id == parent.id,
+                        Asset.role == "final",
+                        Asset.media_type == "image",
+                        Asset.presence == "available",
+                        ProjectAsset.project_id == task.project_id,
+                        ProjectAsset.removed_at.is_(None),
+                    )
+                )
+            )
+            try:
+                if len(assets) != 1:
+                    raise AppError("dependency_output", "起始画面没有唯一可用的图片，已停止后续生成。")
+                asset = assets[0]
+                slot = execution.configuration["input_slot"]
+                values = {
+                    k: v
+                    for k, v in execution.parameters.items()
+                    if k in PARAMETER_MODELS[execution.tool_id].model_fields
+                }
+                params, _, _ = self.registry.normalize(
+                    execution.tool_id,
+                    values,
+                    {slot: row_dict(asset)},
+                    self.settings,
+                )
+                execution.parameters = params
+                execution.inputs = [dict(slot=slot, asset_id=asset.id, blob_id=asset.blob_id)]
+                execution.execution_state = "pending"
+                execution.configuration = {**execution.configuration, "resolved_dependency_asset_id": asset.id}
+                execution.progress = {"stage": "起始画面已保存，自动继续生成视频"}
+                record_event(
+                    session,
+                    "task.updated",
+                    task.project_id,
+                    task.id,
+                    execution_id=execution.id,
+                    state="queued",
+                    step_index=1,
+                )
+                self.wake.set()
+            except AppError as exc:
+                execution.execution_state, execution.finished_at = "failed", now()
+                execution.error = {"code": exc.code, "message": exc.message}
+        return waiting_storage
+
     async def aggregate(self, task_id):
         async with self.db.transaction() as session:
             task = await session.get(Task, task_id)
             if not task:
                 return
             executions = (await session.scalars(select(Execution).where(Execution.task_id == task_id))).all()
+            waiting_storage = await self.advance_steps(session, task, executions)
             if (
                 any(e.execution_state in ("failed", "unknown", "interrupted") for e in executions)
                 or task.cancel_requested
             ):
                 for execution in executions:
-                    if execution.execution_state in ("pending", "waiting_external"):
+                    if execution.execution_state in ("pending", "waiting_external", "blocked"):
                         execution.execution_state = "cancelled"
                         execution.finished_at = now()
             all_terminal = all(e.execution_state in TERMINAL for e in executions)
@@ -618,8 +694,12 @@ class Worker:
                     state = "cancelled"
                 else:
                     state = "completed"
+            elif waiting_storage:
+                state = "needs_attention"
             elif any(e.execution_state in SUBMITTED or e.execution_state == "preparing" for e in executions):
                 state = "running"
+            elif any(e.execution_state == "succeeded" and e.storage_state == "pending" for e in executions):
+                state = "saving"
             else:
                 state = "queued"
             previous = task.state
@@ -630,7 +710,7 @@ class Worker:
                 task.error = next((e.error for e in executions if e.error), None)
             if previous != state:
                 record_event(session, "task.updated", task.project_id, task_id, state=state)
-                if all_terminal:
+                if all_terminal or waiting_storage:
                     if task.turn_id:
                         turn = await session.get(AgentTurn, task.turn_id)
                         turn.state = "completed" if state == "completed" else "failed"

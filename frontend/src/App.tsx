@@ -74,6 +74,8 @@ const imageRoles: Record<string, string> = {
   style_reference: "风格参考",
   composition_reference: "构图参考",
   first_frame: "视频首帧",
+  last_frame: "视频尾帧",
+  scene_reference: "环境参考",
 };
 function Thumb({ asset }: { asset: Data }) {
   return asset.preview_url && asset.presence !== "purged" ? (
@@ -155,9 +157,6 @@ export default function App() {
     enabled: !!project && !!cid,
   });
   const chatMessages = [...(messages.data?.pages ?? [])].reverse().flat();
-  const workflowMessage = [...chatMessages]
-    .reverse()
-    .find((item) => item.details?.task_goal);
   const plans = useQuery({
     queryKey: ["plans", store.projectId, cid],
     queryFn: () =>
@@ -440,49 +439,6 @@ export default function App() {
     });
   }
 
-  async function chooseVideoStep(choice: Data, goal: Data) {
-    if (
-      !cid ||
-      !conversationWritable ||
-      planningTurn ||
-      conversationRunning.length ||
-      busy
-    )
-      return;
-    const source = choice.asset_id || goal.source_asset_id;
-    const content =
-      choice.action === "prepare_first_frame"
-        ? "同意先制作这个视频目标的起始首帧，保留原来的视频动作、角色与时长要求。"
-        : choice.action === "direct_video"
-          ? "已了解首帧的效果风险，请直接用这张图准备原目标的视频方案。"
-          : "请用这张首帧继续准备原目标的视频方案，保留原来的动作、角色与时长要求。";
-    await action("message", () =>
-      api(`/projects/${project!.id}/messages`, "POST", {
-        content,
-        conversation_id: cid,
-        selected_asset_ids: source ? [source] : [],
-        image_roles: source
-          ? {
-              [source]:
-                choice.action === "prepare_first_frame"
-                  ? "edit_source"
-                  : "first_frame",
-            }
-          : {},
-        preferred_tool_id:
-          choice.action === "prepare_first_frame"
-            ? null
-            : "video.generate.minimax_i2v",
-        workflow_choice: {
-          goal_id: choice.goal_id,
-          action: choice.action,
-          ...(choice.asset_id ? { asset_id: choice.asset_id } : {}),
-        },
-        idempotency_key: crypto.randomUUID(),
-      }),
-    );
-  }
-
   async function rewritePrompt(plan: Data) {
     if (!conversationWritable || planningTurn || conversationRunning.length)
       return;
@@ -501,10 +457,7 @@ export default function App() {
           ...new Set(plan.inputs.map((input: Data) => input.asset_id)),
         ],
         image_roles: Object.fromEntries(
-          plan.inputs.map((input: Data) => [
-            input.asset_id,
-            plan.tool_id.startsWith("video.") ? "first_frame" : "auto",
-          ]),
+          plan.inputs.map((input: Data) => [input.asset_id, "auto"]),
         ),
         idempotency_key: crypto.randomUUID(),
       }),
@@ -828,7 +781,7 @@ export default function App() {
                 <p>
                   描述你的想法，或导入一张图片。
                   <br />
-                  从第一帧开始，慢慢打磨属于你的作品。
+                  直接描述你想要的作品，助手会选择合适的生成方式。
                 </p>
                 <div className="welcome-actions">
                   <Button
@@ -949,7 +902,7 @@ export default function App() {
               <span>DeepSeek V4.1 Flash</span>
             </div>
             <span className="assistant-status">
-              {busy === "message" || planningTurn ? "思考中" : "单步创作"}
+              {busy === "message" || planningTurn ? "思考中" : "自动规划"}
             </span>
           </div>
           <ConversationSwitcher
@@ -1020,33 +973,6 @@ export default function App() {
                   <small>{clock(m.created_at)}</small>
                 </span>
                 <p>{m.content}</p>
-                {m.id === workflowMessage?.id &&
-                  !!m.details?.workflow_actions?.length && (
-                    <div className="workflow-actions">
-                      {m.details.workflow_actions.map((choice: Data) => (
-                        <Button
-                          key={`${choice.action}-${choice.asset_id || "source"}`}
-                          disabled={
-                            !conversationWritable ||
-                            !!planningTurn ||
-                            !!conversationRunning.length ||
-                            !!busy
-                          }
-                          onClick={() =>
-                            chooseVideoStep(choice, m.details.task_goal)
-                          }
-                        >
-                          {choice.asset_id && (
-                            <img
-                              src={`/api/v1/assets/${choice.asset_id}/preview`}
-                              alt="待选视频首帧"
-                            />
-                          )}
-                          {choice.label}
-                        </Button>
-                      ))}
-                    </div>
-                  )}
                 {!!m.details?.vision_images?.length && (
                   <div className="message-images">
                     {m.details.vision_images.map((image: Data) => (
@@ -1111,7 +1037,9 @@ export default function App() {
                 <div className="plan-heading">
                   <span>
                     <WandSparkles size={15} />
-                    {draft.tool_name}
+                    {draft.prompt_metadata?.continuation
+                      ? "生成视频"
+                      : draft.tool_name}
                   </span>
                   <span>待确认 · v{draft.revision}</span>
                 </div>
@@ -1119,15 +1047,43 @@ export default function App() {
                 <CreativeSummary plan={draft} />
                 <div className="plan-specs">
                   <span>{draft.candidate_count} 个候选</span>
-                  {draft.parameters.width && (
+                  {(
+                    draft.prompt_metadata?.continuation?.parameters ??
+                    draft.parameters
+                  ).width && (
                     <span>
-                      {draft.parameters.width} × {draft.parameters.height}
+                      {
+                        (
+                          draft.prompt_metadata?.continuation?.parameters ??
+                          draft.parameters
+                        ).width
+                      }{" "}
+                      ×{" "}
+                      {
+                        (
+                          draft.prompt_metadata?.continuation?.parameters ??
+                          draft.parameters
+                        ).height
+                      }
                     </span>
                   )}
-                  {draft.parameters.resolved_seconds && (
+                  {(
+                    draft.prompt_metadata?.continuation?.parameters ??
+                    draft.parameters
+                  ).resolved_seconds && (
                     <span>
-                      {draft.parameters.resolved_seconds.toFixed(2)} 秒 ·{" "}
-                      {draft.parameters.resolved_frames} 帧
+                      {(
+                        draft.prompt_metadata?.continuation?.parameters ??
+                        draft.parameters
+                      ).resolved_seconds.toFixed(2)}{" "}
+                      秒 ·{" "}
+                      {
+                        (
+                          draft.prompt_metadata?.continuation?.parameters ??
+                          draft.parameters
+                        ).resolved_frames
+                      }{" "}
+                      帧
                     </span>
                   )}
                 </div>
@@ -1155,7 +1111,16 @@ export default function App() {
                     改写提示词
                   </Button>
                   <Button
-                    disabled={!!planningTurn || !!busy}
+                    disabled={
+                      !!planningTurn ||
+                      !!busy ||
+                      !!draft.prompt_metadata?.continuation
+                    }
+                    title={
+                      draft.prompt_metadata?.continuation
+                        ? "通过对话修改整项视频任务"
+                        : "修改参数"
+                    }
                     onClick={() => {
                       const t = tools.data?.find((t) => t.id === draft.tool_id);
                       if (t) openTool(t, draft);
@@ -1188,7 +1153,7 @@ export default function App() {
                     onClick={() => execute(draft)}
                   >
                     <Play size={14} />
-                    确认执行
+                    确认生成
                   </Button>
                 </div>
               </div>
@@ -1196,40 +1161,47 @@ export default function App() {
             <div ref={chatEnd} />
           </div>
           <form className="composer" onSubmit={send}>
-            <label className="composer-tool-choice">
-              <WandSparkles size={13} />
-              <span>工具</span>
-              <select
-                aria-label="助手工具选择"
-                value={store.toolPreferences?.[cid ?? ""] ?? ""}
-                disabled={!conversationWritable || !!planningTurn || !!busy}
-                onChange={(event) => {
-                  if (cid) store.setToolPreference(cid, event.target.value);
-                }}
-              >
-                <option value="">自动选择</option>
-                {(tools.data ?? []).map((t) => (
-                  <option
-                    key={t.id}
-                    value={t.id}
-                    disabled={!t.assistant_guidance?.available}
-                  >
-                    {t.name}
-                    {!t.assistant_guidance?.available ? " · 当前不可用" : ""}
-                  </option>
-                ))}
-              </select>
-              {cid && store.toolPreferences?.[cid] && (
-                <button
-                  type="button"
-                  aria-label="恢复自动选择工具"
-                  disabled={!!planningTurn || !!busy}
-                  onClick={() => store.setToolPreference(cid, "")}
+            <details className="composer-advanced">
+              <summary>
+                {store.toolPreferences?.[cid ?? ""]
+                  ? "高级设置 · 已限定工具"
+                  : "高级设置 · 自动选择生成方式"}
+              </summary>
+              <label className="composer-tool-choice">
+                <WandSparkles size={13} />
+                <span>工具</span>
+                <select
+                  aria-label="助手工具选择"
+                  value={store.toolPreferences?.[cid ?? ""] ?? ""}
+                  disabled={!conversationWritable || !!planningTurn || !!busy}
+                  onChange={(event) => {
+                    if (cid) store.setToolPreference(cid, event.target.value);
+                  }}
                 >
-                  <X size={12} />
-                </button>
-              )}
-            </label>
+                  <option value="">自动选择</option>
+                  {(tools.data ?? []).map((t) => (
+                    <option
+                      key={t.id}
+                      value={t.id}
+                      disabled={!t.assistant_guidance?.available}
+                    >
+                      {t.name}
+                      {!t.assistant_guidance?.available ? " · 当前不可用" : ""}
+                    </option>
+                  ))}
+                </select>
+                {cid && store.toolPreferences?.[cid] && (
+                  <button
+                    type="button"
+                    aria-label="恢复自动选择工具"
+                    disabled={!!planningTurn || !!busy}
+                    onClick={() => store.setToolPreference(cid, "")}
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </label>
+            </details>
             {store.selected.length > 0 && (
               <>
                 <div className="context-selection">
@@ -1641,7 +1613,7 @@ export default function App() {
           onClose={() => setModal(null)}
         >
           <p>
-            项目、素材与执行记录保存在本机。助手每轮只准备一个操作，确认后使用现有
+            项目、素材与执行记录保存在本机。助手自动选择生成方式，整项任务确认一次后使用现有
             ComfyUI 工作流执行。
           </p>
           <p className="muted">
@@ -1895,10 +1867,12 @@ function ToolEditor({
           onSubmit({
             tool_id: tool.id,
             parameters: params,
-            inputs: tool.inputs.map((i: Data) => ({
-              slot: i.slot,
-              asset_id: inputs[i.slot],
-            })),
+            inputs: tool.inputs
+              .filter((i: Data) => inputs[i.slot])
+              .map((i: Data) => ({
+                slot: i.slot,
+                asset_id: inputs[i.slot],
+              })),
             candidate_count: count,
             change_summary: summary,
             based_on_execution_id: plan?.based_on_execution_id || null,
@@ -1916,7 +1890,7 @@ function ToolEditor({
             <label key={input.slot}>
               {input.label}
               <select
-                required
+                required={input.required !== false}
                 value={inputs[input.slot]}
                 onChange={(e) =>
                   setInputs({ ...inputs, [input.slot]: e.target.value })
@@ -2041,7 +2015,7 @@ function ToolEditor({
           </label>
           {tool.category === "video" && (
             <p className="muted">
-              输出为24fps，实际时长按工作流帧数规则对齐；确认卡会显示实际秒数。改变比例会拉伸输入图片。
+              输出为24fps，实际时长按工作流帧数规则对齐。参考图不限制视频画面比例；关键帧模式会按目标画面调整输入。
             </p>
           )}
         </div>
@@ -2355,7 +2329,11 @@ function TaskDialog({
         {current.executions.map((e: Data) => (
           <div className="execution-card" key={e.id}>
             <div className="execution-heading">
-              <strong>候选 {e.candidate_index + 1}</strong>
+              <strong>
+                {e.configuration?.step_label
+                  ? `步骤 ${e.configuration.step_index + 1} · ${e.configuration.step_label}`
+                  : `候选 ${e.candidate_index + 1}`}
+              </strong>
               <span>
                 {labels[e.execution_state]} / {labels[e.storage_state]}
               </span>

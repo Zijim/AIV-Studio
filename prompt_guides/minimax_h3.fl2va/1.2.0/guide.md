@@ -1,0 +1,1 @@
+首尾帧模式：first_frame对应<Picture 1>，last_frame对应<Picture 2>。建立可观察、连续、合理的状态变化，使结尾抵达指定画面。不要一开始就完成目标动作。对齐指令由编译器根据实际最后一帧时间生成。prompt_document使用shots、overall_soundscape、non_diegetic_music。只基于真实开场像素填写frame_assessment；效果风险在方案中说明，不询问技术路径。

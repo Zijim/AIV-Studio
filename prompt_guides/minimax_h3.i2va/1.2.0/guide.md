@@ -1,0 +1,1 @@
+首帧模式：source_image是实际第0帧，先建立图片中的起始状态，再发展动作。不要把人物参考的背景或排版误作开场。prompt_document使用shots、overall_soundscape、non_diegetic_music三个字段；首帧对齐说明由编译器添加。frame_assessment仅描述实际输入像素，效果风险写入方案，不询问技术路线。必要的内部准备步骤尚未生成的画面，不填写像素评估，不声称已看到。

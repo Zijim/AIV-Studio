@@ -1,0 +1,27 @@
+{
+  "id": "minimax_h3.i2va",
+  "version": "1.2.0",
+  "task_mode": "video_i2va",
+  "output_format": "video",
+  "shared": [
+    "shared/1.2.0/creative_rules.md",
+    "shared/1.1.1/video_camera_audio.md"
+  ],
+  "description": "从用户指定的开场画面生成连续动作。",
+  "use_cases": [
+    "从用户指定的开场画面生成连续动作。"
+  ],
+  "limitations": [
+    "source_image是实际开场画面；只要求角色身份时应选择Ref2VA。"
+  ],
+  "provenance": "User-provided H3 FL2VA/Ref2VA guides and verified local core node schemas",
+  "adaptations": [
+    "Automatic mode selection by asset purpose; no technical route-choice interaction."
+  ],
+  "files": {
+    "minimax_h3.i2va/1.2.0/guide.md": "a6ca95c108e19fdf8848c366faefb44616d3332e1fd029b0fb223e49f1ead993",
+    "minimax_h3.i2va/1.2.0/examples.json": "a5338d955b09046ec0b16f3a9625b7955c763aae07dc722e474e6078745f932f",
+    "shared/1.2.0/creative_rules.md": "6eadafb1303d8d3b29c223b7fd2ff45bb44fd4fac7f1b66aad7589d9390a880b",
+    "shared/1.1.1/video_camera_audio.md": "5fe326037f8db2b0e4e01862718e4e3171638f2fe2cd18900d637a4e13ce0027"
+  }
+}

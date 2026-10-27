@@ -205,6 +205,7 @@ export const labels: Record<string, string> = {
   succeeded: "执行成功",
   failed: "失败",
   cancelled: "已取消",
+  blocked: "等待前一步保存",
   cancel_requested: "正在取消",
   needs_attention: "需要处理",
   unknown: "结果未知",

@@ -1,0 +1,1 @@
+尾帧模式：last_frame对应<Picture 1>，只在视频最后一帧对齐。推演合理的起始状态和动作，使结尾抵达指定画面；对齐指令由编译器生成。prompt_document使用shots、overall_soundscape、non_diegetic_music。没有真实开场画面，frame_assessment为null。

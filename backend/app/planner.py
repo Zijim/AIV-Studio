@@ -132,8 +132,17 @@ class Planner:
                 for c in calls
             )
             limit = {"routing": 1, "composition": 1, "repair": 1, "history_summary": 4, "proposal": 2}.get(purpose, 0)
+            if purpose == "continuation_composition":
+                snapshot = await s.get(ContextSnapshot, turn.context_id)
+                route = (snapshot.data.get("_agent") or {}).get("route") or {}
+                limit = int(
+                    bool(
+                        route.get("video_continuation")
+                        and str(route.get("tool_id", "")).startswith(("image.edit.", "image.generate."))
+                    )
+                )
             if purpose_calls >= limit:
-                raise AppError("call_limit", "本轮已达到该阶段调用上限；路由和生成各一次，全流程最多修复一次。")
+                raise AppError("call_limit", "本轮已达到该阶段调用上限；每个步骤仅编写一次，全流程最多修复一次。")
 
             def cost(c):
                 return (
@@ -682,6 +691,7 @@ class Planner:
                         replace_owner=bool(outcome.based_on_plan_id),
                         prompt_metadata=outcome.metadata,
                     )
+                    outcome.metadata = plan.get("prompt_metadata") or outcome.metadata
                 async with self.db.transaction() as s:
                     current = await s.get(AgentTurn, turn.id)
                     outcome_meta = outcome.metadata or {}
