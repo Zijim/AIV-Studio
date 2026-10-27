@@ -9,17 +9,90 @@ export function CreativeSummary({ plan }: { plan: Data }) {
   if (!meta) return null;
   return (
     <div className="creative-summary">
+      {meta.task_goal?.output_kind === "video" && (
+        <div className="video-goal">
+          <strong>
+            {meta.task_goal.current_step === "prepare_first_frame"
+              ? "视频任务 · 第 1 步：准备首帧"
+              : "视频任务 · 生成视频"}
+          </strong>
+          <p>{meta.task_goal.description_zh}</p>
+          {meta.task_goal.current_step === "prepare_first_frame" && (
+            <small>
+              本次执行生成图片；完成并查看首帧后，可继续准备视频方案。
+            </small>
+          )}
+          {!!meta.task_goal.warnings_zh?.length && (
+            <details>
+              <summary>首帧效果提示</summary>
+              {meta.task_goal.warnings_zh.map(
+                (warning: string, index: number) => (
+                  <p key={index}>{warning}</p>
+                ),
+              )}
+            </details>
+          )}
+        </div>
+      )}
       {meta.selection_reason_zh && (
         <p className="tool-selection-reason">{meta.selection_reason_zh}</p>
       )}
       {meta.creative_summary_zh && <p>{meta.creative_summary_zh}</p>}
+      {meta.shot_intent && (
+        <div className="shot-design">
+          <div className="shot-design-heading">
+            <span>
+              {meta.validation_status === "structure_validated"
+                ? "镜头设计"
+                : "原镜头设计"}
+            </span>
+            <small>
+              {meta.shot_intent.mode === "action" ? "动作过程" : "姿态保持"}
+            </small>
+          </div>
+          <dl>
+            <div>
+              <dt>
+                场景
+                {meta.shot_intent.scene.source === "assumption" ? "建议" : ""}
+              </dt>
+              <dd>{meta.shot_intent.scene.description_zh}</dd>
+            </div>
+            {meta.shot_intent.scene.requires_surface && (
+              <div>
+                <dt>接触面</dt>
+                <dd>{meta.shot_intent.scene.surface_zh}</dd>
+              </div>
+            )}
+            <div>
+              <dt>起始</dt>
+              <dd>{meta.shot_intent.start_state_zh}</dd>
+            </div>
+            {meta.shot_intent.progression_zh && (
+              <div>
+                <dt>变化</dt>
+                <dd>{meta.shot_intent.progression_zh}</dd>
+              </div>
+            )}
+            <div>
+              <dt>结束</dt>
+              <dd>{meta.shot_intent.end_state_zh}</dd>
+            </div>
+          </dl>
+          <small>
+            {meta.validation_status === "structure_validated"
+              ? "这是助手的镜头规划，实际画面请在生成后检查。"
+              : "手动编辑后，此规划可能与当前提示词不同，请核对正文。"}
+          </small>
+        </div>
+      )}
       {!!meta.assumptions_zh?.length && (
-        <div className="creative-assumptions">
-          <span>本次补充</span>
+        <details className="creative-assumptions">
+          <summary>本次补充 · {meta.assumptions_zh.length} 项</summary>
           {meta.assumptions_zh.map((text: string, i: number) => (
             <p key={i}>{text}</p>
           ))}
-        </div>
+        </details>
       )}
       {!!(
         meta.constraint_review?.kept?.length ||

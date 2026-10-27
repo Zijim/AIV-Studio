@@ -8,8 +8,10 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from .agent_routing import ROUTING_SYSTEM, CreativeBrief, RouteInput, RouterResult
+from .creative_policy import CreativePolicy
 from .errors import AppError
-from .models import AgentTurn, ContextSnapshot, LLMCall, Message, record_event
+from .goal_tracking import VideoGoalTracker
+from .models import AgentTurn, ContextSnapshot, LLMCall, Message, Plan, record_event
 from .prompt_compile import compile_document, generation_metadata
 from .prompt_composition import COMPOSITION_SYSTEM, composition_model
 from .prompt_guides import TOOL_MODES
@@ -34,7 +36,95 @@ class GuidedFlow:
         self.context, self.request, self.images = context, request, images
         self.user_message_id = user_message_id
         self.repaired = False
-        self.trace = {"version": 1, "stages": []}
+        self.policy = CreativePolicy(context, request, planner.db)
+        self.goals = VideoGoalTracker(context, request)
+        self.trace = {"version": 2, "stages": [], "constraint_provenance": self.policy.audit}
+
+    @staticmethod
+    def validation_reason(exc):
+        if isinstance(exc, ValidationError):
+            issues = exc.errors(include_url=False, include_input=False, include_context=False)
+            return "；".join(
+                f"{'.'.join(map(str, issue['loc'])) or '输出内容'}：{issue['msg']}" for issue in issues[:4]
+            )
+        return str(exc)[:1200]
+
+    async def invalid_plan(self, name, reason):
+        pending = self.context.get("pending_plan")
+        preserved = False
+        if pending:
+            async with self.p.db.session() as session:
+                preserved = bool(
+                    await session.scalar(
+                        select(Plan.id).where(Plan.id == pending["id"], Plan.state == "draft").limit(1)
+                    )
+                )
+        stage_label = "工具选择" if name == "routing" else "提示词编写"
+        outcome = "已有待确认方案仍保留。" if preserved else "本轮未创建可执行方案。"
+        message = f"{stage_label}未通过校验：{reason}。本轮自动修复额度已用完，未提交生成任务。{outcome}可以重试本轮或使用手动工具。"
+        return AppError(
+            "plan_invalid",
+            message,
+            502,
+            details={"stage": name, "validation_errors": self.trace["validation_errors"], "draft_preserved": preserved},
+        )
+
+    def parse_stage_result(self, model, raw, name):
+        changes = []
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            # Only a complete final value with one unclosed root object may be closed.
+            # Never finish strings, invent values, trim text, or accept a partial nested object.
+            stack, quoted, escaped, matched = [], False, False, True
+            for char in raw:
+                if quoted:
+                    if escaped:
+                        escaped = False
+                    elif char == "\\":
+                        escaped = True
+                    elif char == '"':
+                        quoted = False
+                elif char == '"':
+                    quoted = True
+                elif char in "{[":
+                    stack.append(char)
+                elif char in "}]":
+                    if not stack or stack.pop() != ("{" if char == "}" else "["):
+                        matched = False
+                        break
+            if matched and not quoted and stack == ["{"] and raw.rstrip().endswith("}"):
+                try:
+                    payload = json.loads(raw + "}")
+                    changes.append("close_root_object")
+                except json.JSONDecodeError:
+                    return model.model_validate_json(raw)
+            else:
+                return model.model_validate_json(raw)
+        if isinstance(payload, dict) and isinstance(payload.get("creative_brief"), dict):
+            brief = dict(payload["creative_brief"])
+            for key in ("based_on_plan_id", "based_on_execution_id", "frame_assessment", "shot_review"):
+                if key not in brief or key not in model.model_fields:
+                    continue
+                if key in payload and payload[key] != brief[key]:
+                    raise ValueError(f"模型输出的{key}在不同层级互相冲突")
+                payload[key] = brief.pop(key)
+                changes.append(f"move_creative_brief.{key}")
+            payload["creative_brief"] = brief
+        if name == "composing" and isinstance(payload, dict):
+            document = payload.get("prompt_document")
+            if isinstance(document, dict) and isinstance(document.get("shots"), list):
+                for index, shot in enumerate(document["shots"]):
+                    # A known empty annotation is not creative content or an execution parameter.
+                    # Keep rejecting unknown fields and nonempty annotations.
+                    if isinstance(shot, dict) and "cut_at_seconds_note_removed" in shot:
+                        if shot["cut_at_seconds_note_removed"] is None:
+                            shot.pop("cut_at_seconds_note_removed")
+                            changes.append(f"drop_empty_shot_annotation.{index}")
+        value = model.model_validate(payload)
+        if changes:
+            self.trace.setdefault("format_normalizations", []).append({"stage": name, "changes": changes})
+        return value
 
     def model_request(self, instructions, context, schema, name, output_limit, repair=None):
         content = [{"type": "input_text", "text": json.dumps(context, ensure_ascii=False, separators=(",", ":"))}]
@@ -52,7 +142,7 @@ class GuidedFlow:
     def routing_request(self, context, repair=None):
         context = {key: value for key, value in context.items() if not key.startswith("_")}
         return self.model_request(
-            ROUTING_SYSTEM, context, RouterResult.model_json_schema(), "tool_routing", 4096, repair
+            ROUTING_SYSTEM, context, RouterResult.model_json_schema(), "tool_routing", 6144, repair
         )
 
     async def stage(self, name):
@@ -111,7 +201,7 @@ class GuidedFlow:
                     builder(self.context, error),
                     purpose="repair" if error else ("composition" if name == "composing" else "routing"),
                 )
-                value = model.model_validate_json(raw)
+                value = self.parse_stage_result(model, raw, name)
                 if name == "composing":
                     await self.stage("validating")
                 result = await validate(value)
@@ -128,13 +218,14 @@ class GuidedFlow:
                     "seed_range",
                 ):
                     raise
-                if self.repaired:
-                    raise AppError(
-                        "plan_invalid", "本轮唯一修复后仍未通过校验，原草案已保留。请补充需求后重试。", 502
-                    ) from exc
-                self.repaired = True
-                error = str(exc)[:2000]
+                reason = self.validation_reason(exc)
+                self.trace.setdefault("validation_errors", []).append({"stage": name, "reason": reason})
                 await self.stage(name)
+                if self.repaired:
+                    failure = await self.invalid_plan(name, reason)
+                    raise failure from exc
+                self.repaired = True
+                error = reason[:2000]
 
     def visual_records(self, value):
         return self.p.visual_records(
@@ -171,14 +262,18 @@ class GuidedFlow:
     async def validate_route(self, route, check_observations=True):
         if check_observations:
             self.visual_records(route)
+        await self.goals.bind(route, self.policy)
         if route.kind != "route":
             if route.tool_id or route.input_bindings:
                 raise ValueError("回复/澄清/能力不足时不能同时提出工具操作")
+            if route.kind == "clarify" and self.goals.goal:
+                if route.clarification_kind == "frame_choice":
+                    route.message_zh = self.goals.ask(route, route.message_zh)
+                else:
+                    self.goals.goal.update(state="awaiting_clarification", available_actions=[])
             return route
         if not route.tool_id or TOOL_MODES[route.tool_id] != route.task_mode:
             raise ValueError("工具和任务模式不匹配")
-        if self.request.preferred_tool_id and route.tool_id != self.request.preferred_tool_id:
-            raise ValueError("不能更换用户本轮限定的工具")
         tool = self.p.registry.get(route.tool_id)
         self.p.guides.get(route.tool_id, tool["version"], route.task_mode)
         if tool["availability"] != "available":
@@ -197,6 +292,16 @@ class GuidedFlow:
                     raise ValueError("使用未选中的图片时须逐字引用用户本轮指代")
                 if asset["execution_id"] not in known_executions and asset["name"] not in self.context["user_request"]:
                     raise ValueError("不能任意使用未明确点名的素材库图片")
+        if (
+            self.goals.goal
+            and self.goals.goal.get("output_kind") == "video"
+            and route.tool_id.startswith("image.")
+            and not self.goals.preparation_approved
+        ):
+            message = self.goals.ask(route, "建议先编辑首帧以改善开场和动作衔接；这一步会先生成图片，视频尚未生成。")
+            return RouterResult(kind="clarify", message_zh=message, visual_observations=route.visual_observations)
+        if self.request.preferred_tool_id and route.tool_id != self.request.preferred_tool_id:
+            raise ValueError("不能更换用户本轮限定的工具")
         if route.tool_id.startswith("video."):
             source = route.input_bindings[0].asset_id
             roles = self.request.image_roles
@@ -204,7 +309,8 @@ class GuidedFlow:
             if roles.get(source, "auto") not in ("auto", "first_frame") or (
                 explicit_first and source != explicit_first
             ):
-                raise ValueError("主体/风格/构图参考不能当成视频首帧，明确首帧必须优先")
+                message = self.goals.ask(route, "这张图片被明确指定为参考，不能直接充当整张视频首帧。")
+                return RouterResult(kind="clarify", message_zh=message, visual_observations=route.visual_observations)
         if self.request.revise_plan:
             if route.based_on_plan_id != self.request.revise_plan.plan_id:
                 raise ValueError("明确调整此方案时必须关联该方案，不能另起方案身份")
@@ -215,14 +321,39 @@ class GuidedFlow:
                 if any(pending["parameters"].get(k) != v for k, v in route.creative_brief.requested_parameters.items()):
                     raise ValueError("仅改写提示词时不能改变原方案执行参数")
         self.source_parameters(route)
+        await self.policy.ground_constraints(route.creative_brief, route.visual_observations)
         self.validate_literals(route.creative_brief)
         # Parse the requested values now, so illegal settings can be repaired in routing.
         self.resolve_settings(route)
+        issue = await self.policy.validate_intent(route)
+        shot = route.creative_brief.shot_intent
+        if issue and not (self.goals.direct and shot and shot.scene.policy == "plain" and shot.mode != "uncertain"):
+            if shot and shot.mode != "uncertain":
+                issue = self.goals.ask(route, issue)
+            return RouterResult(kind="clarify", message_zh=issue, visual_observations=route.visual_observations)
+        if not issue and route.tool_id.startswith("video.") and route.frame_assessment is not None:
+            if route.input_bindings[0].asset_id in {image.metadata["asset_id"] for image in self.images}:
+                issue = self.policy.frame_issue(route, route.frame_assessment)
+        if issue and not (route.tool_id.startswith("video.") and self.goals.direct):
+            issue = self.goals.ask(route, issue)
+            return RouterResult(kind="clarify", message_zh=issue, visual_observations=route.visual_observations)
+        if issue and self.goals.goal:
+            self.goals.goal["warnings_zh"] = [issue]
         return route
 
     def resolve_settings(self, route):
         source = self.source_parameters(route)
         requested = route.creative_brief.requested_parameters
+        # Duration belongs to the later video, never to a preparatory image operation.
+        if route.tool_id.startswith(("image.generate", "image.edit")) and "duration_seconds" in requested:
+            duration = requested["duration_seconds"]
+            video_id = "video.generate.minimax_i2v"
+            deferred = route.creative_brief.deferred_parameters.setdefault(video_id, {})
+            if "duration_seconds" in deferred and deferred["duration_seconds"] != duration:
+                raise ValueError("当前记录的后续视频时长互相冲突，请明确目标时长")
+            deferred["duration_seconds"] = duration
+            del requested["duration_seconds"]
+        self.validate_deferred_parameters(route)
         derived = (
             {"width", "height", "resolved_frames", "resolved_seconds"}
             if route.tool_id.startswith("video.")
@@ -230,8 +361,9 @@ class GuidedFlow:
         )
         values = {k: v for k, v in source.items() if k not in derived | {"prompt", "instruction", "negative_prompt"}}
         allowed = set(PARAMETER_MODELS[route.tool_id].model_fields) - {"prompt", "instruction", "negative_prompt"}
-        if not set(requested) <= allowed:
-            raise ValueError("requested_parameters包含当前工具不支持或派生的参数")
+        unsupported = set(requested) - allowed
+        if unsupported:
+            raise ValueError(f"当前工具不支持这些执行参数：{'、'.join(sorted(unsupported))}")
         values.update(requested)
         required_text = (
             {"prompt": "_"}
@@ -246,12 +378,55 @@ class GuidedFlow:
             parsed.update(self.p.registry.resolve_video(parsed, asset["media_info"], self.p.settings))
         return parsed
 
+    def validate_deferred_parameters(self, route):
+        for tool_id, parameters in route.creative_brief.deferred_parameters.items():
+            if tool_id == route.tool_id:
+                raise ValueError("后续参数不能与当前工具重复，请放入当前执行参数")
+            model = PARAMETER_MODELS[tool_id]
+            allowed = set(model.model_fields) - {"prompt", "instruction", "negative_prompt"}
+            if unsupported := set(parameters) - allowed:
+                raise ValueError(f"后续工具不支持这些参数：{'、'.join(sorted(unsupported))}")
+            text = {key: "_" for key in ("prompt", "instruction") if key in model.model_fields}
+            model.model_validate({**text, **parameters})
+
+    def inherit_brief(self, original, supplied):
+        brief = original.model_copy(deep=True)
+        if supplied is None:
+            return brief
+        if supplied.camera_policy not in ("unspecified", original.camera_policy) and not (
+            original.camera_policy == "unspecified" and supplied.camera_policy == "static"
+        ):
+            raise ValueError("提示词编写改变了已确定的镜头策略")
+        for name in supplied.audio_policy.model_fields_set:
+            value = getattr(supplied.audio_policy, name)
+            expected = getattr(original.audio_policy, name)
+            if value is not None and value != expected and not (expected is None and value is False):
+                raise ValueError("提示词编写改变了已确定的声音策略")
+        for name in ("must_keep", "requested_changes", "must_not", "literal_texts"):
+            items = getattr(brief, name)
+            keys = {(item.text, getattr(item, "kind", None)) for item in items}
+            for item in getattr(supplied, name):
+                key = (item.text, getattr(item, "kind", None))
+                if key not in keys:
+                    items.append(item.model_copy(deep=True))
+                    keys.add(key)
+        brief.assumptions_zh = list(dict.fromkeys(brief.assumptions_zh + supplied.assumptions_zh))
+        return CreativeBrief.model_validate(brief.model_dump())
+
     async def run(self):
         pending = self.context.get("pending_plan")
         if (
             self.request.revise_plan
             and self.request.revise_plan.rewrite_only
             and (pending.get("prompt_metadata") or {}).get("creative_brief")
+            and (
+                not (
+                    pending["tool_id"].startswith("video.")
+                    or "video.generate.minimax_i2v"
+                    in (pending["prompt_metadata"]["creative_brief"].get("deferred_parameters") or {})
+                )
+                or pending["prompt_metadata"]["creative_brief"].get("shot_intent")
+            )
         ):
             brief = CreativeBrief.model_validate((pending.get("prompt_metadata") or {}).get("creative_brief") or {})
             brief.requested_parameters = {
@@ -286,14 +461,17 @@ class GuidedFlow:
             # Observations are generated by the composer; this deterministic path has no model observations.
             for ref in route.input_bindings:
                 next(a for a in self.context["assets"] if a["id"] == ref.asset_id)["selected"] = True
-            await self.validate_route(route, check_observations=False)
+            route = await self.validate_route(route, check_observations=False)
         else:
             route = await self.run_stage("routing", RouterResult, self.routing_request, self.validate_route)
-            if route.kind != "route":
-                await self.stage("validating")
-                return GuidedOutcome(
-                    "clarify" if route.kind == "clarify" else "explain", route.message_zh, self.visual_records(route)
-                )
+        if route.kind != "route":
+            await self.stage("validating")
+            return GuidedOutcome(
+                "clarify" if route.kind == "clarify" else "explain",
+                route.message_zh,
+                self.visual_records(route) if route.visual_observations else [],
+                metadata=self.goals.metadata(route),
+            )
         tool = self.p.registry.get(route.tool_id)
         guide = self.p.guides.get(route.tool_id, tool["version"], route.task_mode)
         source_parameters = self.source_parameters(route)
@@ -341,6 +519,8 @@ class GuidedFlow:
                 resolved_execution_settings=resolved,
                 asset_binding_map=bindings,
                 guide_examples=guide["examples"],
+                video_goal=self.goals.goal,
+                direct_video_approved=self.goals.direct,
             )
             return self.model_request(
                 COMPOSITION_SYSTEM + "\n\n" + guide["text"],
@@ -355,27 +535,43 @@ class GuidedFlow:
             observations = self.visual_records(composition)
             if composition.kind != "propose":
                 return GuidedOutcome(
-                    "clarify" if composition.kind == "clarify" else "explain", composition.message_zh, observations
+                    "clarify" if composition.kind == "clarify" else "explain",
+                    composition.message_zh,
+                    observations,
+                    metadata=self.goals.metadata(route),
                 )
             if composition.task_mode != route.task_mode:
                 raise ValueError("不能改变已经固定的任务模式")
-            brief = composition.creative_brief
-            original = route.creative_brief
-            for name in ("must_keep", "requested_changes", "must_not"):
-                if not {x.text for x in getattr(original, name)} <= {x.text for x in getattr(brief, name)}:
-                    raise ValueError("专用生成遗漏路由已提取的明确约束")
-            if not {(x.text, x.kind) for x in original.literal_texts} <= {
-                (x.text, x.kind) for x in brief.literal_texts
-            }:
-                raise ValueError("不能丢弃用户原文要求")
+            brief = self.inherit_brief(route.creative_brief, composition.creative_brief)
+            composition.creative_brief = brief
+            await self.policy.ground_constraints(brief, composition.visual_observations)
             self.validate_literals(brief)
-            if brief.camera_policy != original.camera_policy or brief.audio_policy != original.audio_policy:
-                raise ValueError("不能更改已确定的镜头或声音策略")
+            if route.tool_id.startswith("video."):
+                issue = self.policy.frame_issue(route, composition.frame_assessment)
+                if issue and not self.goals.direct:
+                    return GuidedOutcome(
+                        "clarify", self.goals.ask(route, issue), observations, metadata=self.goals.metadata(route)
+                    )
+                if issue and self.goals.goal:
+                    self.goals.goal["warnings_zh"] = list(
+                        dict.fromkeys(self.goals.goal.get("warnings_zh", []) + [issue])
+                    )
             if composition.constraint_review.conflicts:
-                raise ValueError("仍有创作约束冲突时应澄清，不能提出可执行方案")
+                return GuidedOutcome(
+                    "clarify",
+                    "当前方案仍有需要你取舍的要求：\n"
+                    + "\n".join(f"• {item}" for item in composition.constraint_review.conflicts)
+                    + "\n请明确如何取舍后再准备方案，本轮没有提交生成任务。",
+                    observations,
+                )
+            self.policy.validate_shot_review(route, composition.shot_review)
             params = composition.parameters.model_dump(exclude_unset=True)
             defaults = {k: v for k, v in resolved.items() if k in composition.parameters.model_fields}
             params = {**defaults, **params}
+            if any(
+                params.get(key) != resolved[key] for key in route.creative_brief.requested_parameters if key != "seed"
+            ):
+                raise ValueError("提示词编写改变了用户明确指定的执行参数")
             if route.task_mode == "video_i2va":
                 if any(params[k] != resolved[k] for k in ("duration_seconds", "megapixels", "aspect_ratio")):
                     raise ValueError("视频时长、面积和比例已在编写前冻结，不能改变")
@@ -408,13 +604,15 @@ class GuidedFlow:
                 composition.candidate_count,
             )
             metadata = generation_metadata(guide, route, composition, bindings, params, sections)
+            metadata.update(self.goals.planned(route))
+            metadata["constraint_provenance"] = list(self.policy.audit)
+            metadata["assumptions_zh"] = list(dict.fromkeys(metadata["assumptions_zh"] + self.policy.suggestions))
             # Display stable creative changes instead of structural repair commentary.
-            if brief.must_keep or brief.requested_changes:
-                metadata["constraint_review"] = {
-                    "kept": [item.text for item in brief.must_keep],
-                    "changed": [item.text for item in brief.requested_changes],
-                    "conflicts": [],
-                }
+            metadata["constraint_review"] = {
+                "kept": [item.text for item in brief.must_keep],
+                "changed": [item.text for item in brief.requested_changes],
+                "conflicts": [],
+            }
             return GuidedOutcome(
                 "propose",
                 composition.message_zh,

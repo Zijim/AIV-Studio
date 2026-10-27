@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 
 from .conversations import resolve_conversation, touch_conversation
 from .errors import AppError
+from .goal_tracking import goal_key, store_goal
 from .models import (
     AgentTurn,
     ContextSnapshot,
@@ -15,6 +16,7 @@ from .models import (
     Plan,
     Project,
     ProjectAsset,
+    Setting,
     Task,
     record_event,
     row_dict,
@@ -139,6 +141,17 @@ class PlanService:
                 not prompt_metadata or prompt_metadata.get("validation_status") != "structure_validated"
             ):
                 raise AppError("prompt_unvalidated", "当前文本为手动编辑内容，不能标记为专用指引已校验。", 409)
+            if prompt_metadata and prompt_metadata.get("task_goal"):
+                prompt_metadata = deepcopy(prompt_metadata)
+                goal = prompt_metadata["task_goal"]
+                if latest and latest.tool_id != tool["id"]:
+                    prompt_metadata.pop("task_goal", None)
+                    prompt_metadata.pop("workflow_actions", None)
+                elif tool["id"].startswith("video."):
+                    goal["video_parameters"] = {
+                        **goal.get("video_parameters", {}),
+                        **{key: params[key] for key in ("duration_seconds", "megapixels", "aspect_ratio")},
+                    }
             revision = 1
             if plan_id:
                 if latest.revision != expected_revision:
@@ -273,6 +286,13 @@ class PlanService:
                 task.retry_of_task_id = source.task_id
             session.add(task)
             await session.flush()
+            goal = (plan.prompt_metadata or {}).get("task_goal")
+            if goal and goal.get("output_kind") == "video":
+                active_goal = await session.get(Setting, goal_key(conversation.id))
+                if not active_goal or active_goal.value.get("id") == goal["id"]:
+                    await store_goal(
+                        session, conversation.id, {**goal, "state": "executing", "active_task_id": task.id}
+                    )
             for index, seed in enumerate(plan.seed_list):
                 session.add(
                     Execution(

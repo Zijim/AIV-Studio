@@ -1,0 +1,9 @@
+[
+  {
+    "request": "做一张只写“春日市集”的简洁海报",
+    "document": {
+      "positive_prompt": "Minimal poster with the exact headline \"春日市集\" centered in the upper third, ample ivory negative space and a small arrangement of green leaves in the lower corner. Clear readable typography with no additional words.",
+      "negative_prompt": "additional slogans"
+    }
+  }
+]

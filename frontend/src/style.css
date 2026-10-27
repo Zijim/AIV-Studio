@@ -1935,6 +1935,41 @@ details small {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.shot-design {
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid #4c4136;
+  border-radius: 8px;
+  background: #26231f;
+}
+.shot-design-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #e0b991;
+}
+.shot-design small {
+  color: #a9a095;
+  font-size: 10px;
+}
+.shot-design dl {
+  margin: 8px 0;
+}
+.shot-design dl > div {
+  display: grid;
+  grid-template-columns: 45px minmax(0, 1fr);
+  gap: 7px;
+  margin: 6px 0;
+}
+.shot-design dt {
+  color: #c4a888;
+  font-size: 10px;
+}
+.shot-design dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .tool-selection-reason {
   color: #d5b28e;
 }
@@ -1945,9 +1980,10 @@ details small {
   border-radius: 0 6px 6px 0;
   margin: 8px 0;
 }
-.creative-assumptions > span {
+.creative-assumptions > summary {
   font-size: 10px;
   color: #c6a789;
+  cursor: pointer;
 }
 .creative-assumptions p {
   margin: 3px 0;
@@ -2086,4 +2122,28 @@ details small {
   border-radius: 8px;
   font-size: 12px;
   line-height: 1.7;
+}
+.video-goal {
+  border-left: 3px solid var(--accent, #7066ce);
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: rgba(112, 102, 206, 0.06);
+}
+
+.video-goal p {
+  margin: 6px 0;
+}
+
+.workflow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.workflow-actions img {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  border-radius: 4px;
 }

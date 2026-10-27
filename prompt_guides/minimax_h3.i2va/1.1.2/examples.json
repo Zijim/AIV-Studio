@@ -1,0 +1,48 @@
+[
+  {
+    "request": "首帧是一只手放在关闭的雨伞柄上，让它打开雨伞，固定镜头无配乐。",
+    "document": {
+      "shots": [
+        {
+          "index": 1,
+          "cut_at_seconds": null,
+          "description": "A static close shot begins from <Picture 1>, retaining the hand, sleeve, closed umbrella and existing framing. The hand tightens around the handle and pushes the runner upward; the ribs spread continuously until the canopy is fully open. The hand settles into a steady grip as the fabric stops moving."
+        }
+      ],
+      "overall_soundscape": "A brief mechanical click accompanies the runner moving upward, followed by a soft snap and rustle of the opening canopy.",
+      "non_diegetic_music": "N/A"
+    }
+  },
+  {
+    "counterexample": "用角色三视图作为source_image，写“只出现一个角色，不要三视图”就声称换了开场。",
+    "correction": "该图仍是首帧；说明限制并准备独立的首帧编辑或澄清，不声称已使用角色参考模式。"
+  },
+  {
+    "case": "动作结果与首帧不能混淆",
+    "user": "以骑士为主体，把巨剑插入地面，最后双手扶剑。",
+    "shot_intent": {
+      "mode": "action",
+      "intent_quote": "以骑士为主体，把巨剑插入地面，最后双手扶剑。",
+      "start_state_zh": "持剑、剑尖尚未触地",
+      "progression_zh": "下压接触泥土并插入",
+      "end_state_zh": "剑插地、双手扶柄站稳",
+      "scene": {
+        "policy": "create",
+        "description_zh": "石墙前泥土地，侧后方自然光。",
+        "requires_surface": true,
+        "surface_zh": "可见泥土地",
+        "source": "assumption"
+      }
+    },
+    "scene_suggestion": "石墙前的泥土地，侧后方自然光，环境有纵深，地面和剑尖接触位置清楚可见。",
+    "bad": "黑底立绘已经双手扶剑，只加呼吸、微小重心变化；项目空白却声称项目禁止背景。"
+  },
+  {
+    "case": "尊重明确的静态展示要求",
+    "user": "保持黑色背景，骑士扶着已经插好的剑站立，只需轻微呼吸。",
+    "mode": "hold",
+    "policy": "plain",
+    "explicit_background": true,
+    "note": "保留黑底和微动，不强迫添加外景或插剑过程。"
+  }
+]

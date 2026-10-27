@@ -1,0 +1,28 @@
+{
+  "id": "qwen.generate",
+  "version": "1.1.0",
+  "task_mode": "image_generate",
+  "output_format": "image",
+  "shared": [
+    "shared/1.1.0/creative_rules.md"
+  ],
+  "description": "生成新图片，适合需要准确文字内容、布局和复杂关系的画面。",
+  "use_cases": [
+    "文字或海报排版",
+    "复杂物体关系或质量预设"
+  ],
+  "limitations": [
+    "无图像参考执行输入",
+    "fast和quality是同一工具预设，不是不同任务模式"
+  ],
+  "provenance": "application tool capabilities",
+  "adaptations": [
+    "基于当前注册工作流及参数Schema",
+    "2026-10-23：镜头状态、场景补全、约束来源及首帧适用性"
+  ],
+  "files": {
+    "qwen.generate/1.1.0/guide.md": "610be97a7ef11b6c98b7cdd3f66c5b8bc70764e3e5a7399b340afdea3e9f9da1",
+    "qwen.generate/1.1.0/examples.json": "41bf865df974d172f0483ab02375377f8f5f24ba58428faa10b330d8cbecea31",
+    "shared/1.1.0/creative_rules.md": "fb1dca307390c04ca460b951d17f8e2edf3c41d0c63f02f0c8101bf99b795d75"
+  }
+}

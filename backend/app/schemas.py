@@ -125,6 +125,12 @@ class RevisePlan(StrictModel):
     rewrite_only: bool = False
 
 
+class WorkflowChoice(StrictModel):
+    goal_id: str
+    action: Literal["prepare_first_frame", "direct_video", "continue_video"]
+    asset_id: str | None = None
+
+
 class MessageRequest(StrictModel):
     content: str = Field(min_length=1, max_length=16000)
     selected_asset_ids: list[str] = Field(default_factory=list, max_length=30)
@@ -136,6 +142,7 @@ class MessageRequest(StrictModel):
     conversation_id: str | None = None
     preferred_tool_id: str | None = None
     revise_plan: RevisePlan | None = None
+    workflow_choice: WorkflowChoice | None = None
 
     @model_validator(mode="after")
     def selected_roles(self):

@@ -1,0 +1,28 @@
+{
+  "id": "zimage.generate",
+  "version": "1.1.0",
+  "task_mode": "image_generate",
+  "output_format": "image",
+  "shared": [
+    "shared/1.1.0/creative_rules.md"
+  ],
+  "description": "快速生成一幅新图片，适合一般主体、场景和风格探索。",
+  "use_cases": [
+    "从文字创建新画面",
+    "一般构图或风格探索"
+  ],
+  "limitations": [
+    "不是原图局部修改工具",
+    "无图片输入槽位，不能把参考图当成执行条件"
+  ],
+  "provenance": "application tool capabilities",
+  "adaptations": [
+    "基于当前注册工作流及参数Schema",
+    "2026-10-23：镜头状态、场景补全、约束来源及首帧适用性"
+  ],
+  "files": {
+    "zimage.generate/1.1.0/guide.md": "54eaa991f29407b7e5361f74da40fe15ec30b7256b681ba2b8129c9e267e1252",
+    "zimage.generate/1.1.0/examples.json": "54ec776c63d8b940eba00b1d11a98883872cc07837f1bd956e6bc05f5abf07ec",
+    "shared/1.1.0/creative_rules.md": "fb1dca307390c04ca460b951d17f8e2edf3c41d0c63f02f0c8101bf99b795d75"
+  }
+}

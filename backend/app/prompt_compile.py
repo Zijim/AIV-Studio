@@ -107,6 +107,12 @@ def generation_metadata(guide, route, composition, bindings, params, sections):
     text = params.get("prompt") or params.get("instruction") or ""
     import hashlib
 
+    assumptions = composition.creative_brief.assumptions_zh + composition.assumptions_zh
+    deferred = composition.creative_brief.deferred_parameters.get("video.generate.minimax_i2v", {})
+    if "duration_seconds" in deferred:
+        assumptions = assumptions + [
+            f"后续视频目标时长为{deferred['duration_seconds']}秒；本轮只准备图片方案，视频需要另行确认。"
+        ]
     return {
         "generation_origin": "agent_guided",
         "validation_status": "structure_validated",
@@ -117,8 +123,13 @@ def generation_metadata(guide, route, composition, bindings, params, sections):
         "task_mode": route.task_mode,
         "selection_reason_zh": route.selection_reason_zh or composition.selection_reason_zh,
         "creative_summary_zh": composition.creative_summary_zh,
-        "assumptions_zh": composition.assumptions_zh,
+        "assumptions_zh": list(dict.fromkeys(assumptions)),
         "creative_brief": composition.creative_brief.model_dump(),
+        "shot_intent": composition.creative_brief.shot_intent.model_dump()
+        if composition.creative_brief.shot_intent
+        else None,
+        "frame_assessment": composition.frame_assessment.model_dump() if composition.frame_assessment else None,
+        "shot_review": composition.shot_review.model_dump() if composition.shot_review else None,
         "constraint_review": composition.constraint_review.model_dump(),
         "asset_binding_map": bindings,
         "prompt_document": composition.prompt_document.model_dump() if composition.prompt_document else None,

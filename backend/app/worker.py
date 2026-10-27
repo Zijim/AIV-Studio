@@ -11,6 +11,7 @@ from sqlalchemy import delete, func, select
 from .comfy import file_references
 from .conversations import touch_conversation
 from .errors import AppError
+from .goal_tracking import finish_video_step
 from .models import (
     AgentTurn,
     Artifact,
@@ -643,6 +644,10 @@ class Worker:
                         content += "请查看任务详情；可以补存已有结果，补存不会重新生成。"
                     else:
                         content += "请查看结果，再告诉我下一步想怎么调整。"
+                    details = {}
+                    video_step = await finish_video_step(session, task, executions, state)
+                    if video_step:
+                        content, details = video_step
                     session.add(
                         Message(
                             project_id=task.project_id,
@@ -651,6 +656,7 @@ class Worker:
                             role="assistant",
                             content=content,
                             task_id=task_id,
+                            details=details,
                         )
                     )
                     record_event(session, "message.created", task.project_id, task_id)

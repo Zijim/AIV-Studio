@@ -14,6 +14,7 @@ from .agent_flow import GuidedFlow
 from .agent_routing import ROUTING_SYSTEM, RouterResult
 from .conversations import default_conversation_id, memory_key, resolve_conversation, touch_conversation
 from .errors import AppError
+from .goal_tracking import goal_key, store_goal, validate_choice
 from .llm_context import SUMMARY_SYSTEM, HistorySummary, TokenCounter
 from .models import (
     AgentTurn,
@@ -414,7 +415,7 @@ class Planner:
             payload = request.model_dump()
             if request.conversation_id is None:
                 payload.pop("conversation_id")  # Preserve legacy idempotency hashes.
-            for optional in ("preferred_tool_id", "revise_plan"):
+            for optional in ("preferred_tool_id", "revise_plan", "workflow_choice"):
                 if payload[optional] is None:
                     payload.pop(optional)
             if request.preferred_tool_id:
@@ -444,6 +445,17 @@ class Planner:
                     raise AppError(
                         "await_feedback", "请等待当前对话的任务结束，再根据结果继续；其他对话仍可使用。", 409
                     )
+                goal_row = await s.get(Setting, goal_key(cid))
+                active_goal = goal_row.value if goal_row else None
+                validate_choice(active_goal, request.workflow_choice)
+                if request.workflow_choice:
+                    choice = request.workflow_choice
+                    source = (
+                        choice.asset_id if choice.action == "continue_video" else active_goal.get("source_asset_id")
+                    )
+                    if not source or any(aid != source for aid in selected_ids):
+                        raise AppError("goal_input", "此选项需要使用对应目标的图片，请重新选择。", 409)
+                    selected_ids = [source]
                 rows = (
                     await s.execute(
                         select(Asset, ProjectAsset)
@@ -606,6 +618,8 @@ class Planner:
                     "tools": self.guides.cards(self.registry, self.settings),
                     "preferred_tool_id": request.preferred_tool_id,
                     "revise_plan": request.revise_plan.model_dump() if request.revise_plan else None,
+                    "active_goal": active_goal,
+                    "workflow_choice": request.workflow_choice.model_dump() if request.workflow_choice else None,
                     "user_request": request.content,
                 }
 
@@ -670,6 +684,9 @@ class Planner:
                     )
                 async with self.db.transaction() as s:
                     current = await s.get(AgentTurn, turn.id)
+                    outcome_meta = outcome.metadata or {}
+                    if outcome_meta.get("task_goal"):
+                        await store_goal(s, cid, outcome_meta["task_goal"])
                     current.state = (
                         "awaiting_execution"
                         if plan
@@ -700,7 +717,12 @@ class Planner:
                             role="assistant",
                             content=proposal.message,
                             plan_id=plan["id"] if plan else None,
-                            details={"visual_observations": observations, "planning_version": "guided_v1"},
+                            details={
+                                "visual_observations": observations,
+                                "planning_version": "guided_v2",
+                                "task_goal": outcome_meta.get("task_goal"),
+                                "workflow_actions": outcome_meta.get("workflow_actions", []),
+                            },
                         )
                     )
                     result = {"turn_id": turn.id, "conversation_id": cid, "state": current.state, "plan": plan}
@@ -739,6 +761,8 @@ class Planner:
                         "code": getattr(exc, "code", "planner_failed"),
                         "message": getattr(exc, "message", "方案准备失败，请查看诊断信息。"),
                     }
+                    if getattr(exc, "details", None):
+                        current.error["details"] = exc.details
                     s.add(
                         Message(
                             project_id=project_id,

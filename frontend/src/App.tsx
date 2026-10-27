@@ -155,6 +155,9 @@ export default function App() {
     enabled: !!project && !!cid,
   });
   const chatMessages = [...(messages.data?.pages ?? [])].reverse().flat();
+  const workflowMessage = [...chatMessages]
+    .reverse()
+    .find((item) => item.details?.task_goal);
   const plans = useQuery({
     queryKey: ["plans", store.projectId, cid],
     queryFn: () =>
@@ -435,6 +438,49 @@ export default function App() {
       });
       store.setMessageDraft(targetConversation, "");
     });
+  }
+
+  async function chooseVideoStep(choice: Data, goal: Data) {
+    if (
+      !cid ||
+      !conversationWritable ||
+      planningTurn ||
+      conversationRunning.length ||
+      busy
+    )
+      return;
+    const source = choice.asset_id || goal.source_asset_id;
+    const content =
+      choice.action === "prepare_first_frame"
+        ? "同意先制作这个视频目标的起始首帧，保留原来的视频动作、角色与时长要求。"
+        : choice.action === "direct_video"
+          ? "已了解首帧的效果风险，请直接用这张图准备原目标的视频方案。"
+          : "请用这张首帧继续准备原目标的视频方案，保留原来的动作、角色与时长要求。";
+    await action("message", () =>
+      api(`/projects/${project!.id}/messages`, "POST", {
+        content,
+        conversation_id: cid,
+        selected_asset_ids: source ? [source] : [],
+        image_roles: source
+          ? {
+              [source]:
+                choice.action === "prepare_first_frame"
+                  ? "edit_source"
+                  : "first_frame",
+            }
+          : {},
+        preferred_tool_id:
+          choice.action === "prepare_first_frame"
+            ? null
+            : "video.generate.minimax_i2v",
+        workflow_choice: {
+          goal_id: choice.goal_id,
+          action: choice.action,
+          ...(choice.asset_id ? { asset_id: choice.asset_id } : {}),
+        },
+        idempotency_key: crypto.randomUUID(),
+      }),
+    );
   }
 
   async function rewritePrompt(plan: Data) {
@@ -974,6 +1020,33 @@ export default function App() {
                   <small>{clock(m.created_at)}</small>
                 </span>
                 <p>{m.content}</p>
+                {m.id === workflowMessage?.id &&
+                  !!m.details?.workflow_actions?.length && (
+                    <div className="workflow-actions">
+                      {m.details.workflow_actions.map((choice: Data) => (
+                        <Button
+                          key={`${choice.action}-${choice.asset_id || "source"}`}
+                          disabled={
+                            !conversationWritable ||
+                            !!planningTurn ||
+                            !!conversationRunning.length ||
+                            !!busy
+                          }
+                          onClick={() =>
+                            chooseVideoStep(choice, m.details.task_goal)
+                          }
+                        >
+                          {choice.asset_id && (
+                            <img
+                              src={`/api/v1/assets/${choice.asset_id}/preview`}
+                              alt="待选视频首帧"
+                            />
+                          )}
+                          {choice.label}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
                 {!!m.details?.vision_images?.length && (
                   <div className="message-images">
                     {m.details.vision_images.map((image: Data) => (

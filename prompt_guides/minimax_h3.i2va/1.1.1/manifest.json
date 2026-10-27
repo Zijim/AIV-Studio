@@ -1,0 +1,30 @@
+{
+  "id": "minimax_h3.i2va",
+  "version": "1.1.1",
+  "task_mode": "video_i2va",
+  "output_format": "video",
+  "shared": [
+    "shared/1.1.1/creative_rules.md",
+    "shared/1.1.1/video_camera_audio.md"
+  ],
+  "description": "从一张完整首帧生成视频和声音，当前工具仅接入I2VA模式。",
+  "use_cases": [
+    "用户指定开场画面并要求连续动作"
+  ],
+  "limitations": [
+    "source_image是实际首帧，不是独立角色参考",
+    "不支持尾帧、全参考、视频编辑或音轨复制",
+    "变更比例会拉伸首帧，视频一次一个候选"
+  ],
+  "provenance": "user-provided fl2va I2VA/shared sections",
+  "adaptations": [
+    "首版仅I2VA；默认单镜头固定机位、自然声、无配乐；不设通用最小字数；尊重用户语言选择",
+    "2026-10-23：镜头状态、场景补全、约束来源及首帧适用性"
+  ],
+  "files": {
+    "minimax_h3.i2va/1.1.1/guide.md": "206b1694974d333f248760fc14361a4117544178e13fdd39bd96b3b09cc78981",
+    "minimax_h3.i2va/1.1.1/examples.json": "1bbac5c4f4141634d2471ad0d1dd7d5d16dd85eb3a7548812838426b608773ad",
+    "shared/1.1.1/creative_rules.md": "b3c74c3a4f6f8424d5fcef909cce548bf13d8b464dd51fd15ed8283e1b3658a6",
+    "shared/1.1.1/video_camera_audio.md": "5fe326037f8db2b0e4e01862718e4e3171638f2fe2cd18900d637a4e13ce0027"
+  }
+}

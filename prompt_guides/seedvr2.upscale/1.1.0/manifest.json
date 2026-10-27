@@ -1,0 +1,27 @@
+{
+  "id": "seedvr2.upscale",
+  "version": "1.1.0",
+  "task_mode": "image_upscale",
+  "output_format": "none",
+  "shared": [
+    "shared/1.1.0/creative_rules.md"
+  ],
+  "description": "放大已有图片，选择倍率并核对实际输出尺寸及资源限制。",
+  "use_cases": [
+    "只需提高图片分辨率"
+  ],
+  "limitations": [
+    "不接受创作prompt",
+    "不能换服装、改场景或保证恢复不存在的真实细节"
+  ],
+  "provenance": "application tool capabilities",
+  "adaptations": [
+    "基于当前注册工作流及参数Schema",
+    "2026-10-23：镜头状态、场景补全、约束来源及首帧适用性"
+  ],
+  "files": {
+    "seedvr2.upscale/1.1.0/guide.md": "b16365a85856aaf1d23fe2576acc73f9dcff8bf2f807c5f57a65a7500c63b963",
+    "seedvr2.upscale/1.1.0/examples.json": "a5338d955b09046ec0b16f3a9625b7955c763aae07dc722e474e6078745f932f",
+    "shared/1.1.0/creative_rules.md": "fb1dca307390c04ca460b951d17f8e2edf3c41d0c63f02f0c8101bf99b795d75"
+  }
+}

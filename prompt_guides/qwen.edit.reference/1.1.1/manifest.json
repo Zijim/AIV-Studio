@@ -1,0 +1,28 @@
+{
+  "id": "qwen.edit.reference",
+  "version": "1.1.1",
+  "task_mode": "image_edit_reference",
+  "output_format": "edit",
+  "shared": [
+    "shared/1.1.1/creative_rules.md"
+  ],
+  "description": "使用主图和一张参考图进行质量编辑，明确哪些特征从参考图迁移。",
+  "use_cases": [
+    "将参考图服装/风格等用于主图",
+    "两图职责明确的编辑"
+  ],
+  "limitations": [
+    "必须同时指定source_image和reference_image",
+    "不能随机把两张图的角色合并"
+  ],
+  "provenance": "application tool capabilities",
+  "adaptations": [
+    "基于当前注册工作流及参数Schema",
+    "2026-10-23：镜头状态、场景补全、约束来源及首帧适用性"
+  ],
+  "files": {
+    "qwen.edit.reference/1.1.1/guide.md": "dd999dd37bf03f53147d20d3a7086c35b92cbb9164bfcce8aeeb8e85054831db",
+    "qwen.edit.reference/1.1.1/examples.json": "ae232b15a2d5f2c2a895a62082d7d70f361a1713b1bb1f7c144aafc842ced359",
+    "shared/1.1.1/creative_rules.md": "b3c74c3a4f6f8424d5fcef909cce548bf13d8b464dd51fd15ed8283e1b3658a6"
+  }
+}
