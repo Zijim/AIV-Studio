@@ -61,6 +61,8 @@ import { Button, Empty, Modal } from "./components/ui";
 import { ConversationSwitcher } from "./components/ConversationSwitcher";
 import {
   TaskTiming,
+  TaskIdentity,
+  ExecutionIdentity,
   ExecutionTiming,
   ExecutionParameters,
   executionLabel,
@@ -1436,6 +1438,7 @@ export default function App() {
                   )}
                 </div>
                 <div className="task-row-record">
+                  <TaskIdentity task={t} />
                   <TaskTiming task={t} compact />
                   <details className="task-parameters">
                     <summary>
@@ -1452,6 +1455,7 @@ export default function App() {
                     {t.executions.map((e: Data) => (
                       <section className="queue-execution" key={e.id}>
                         <strong>{executionLabel(e)}</strong>
+                        <ExecutionIdentity execution={e} />
                         <ExecutionTiming execution={e} />
                         <ExecutionParameters
                           execution={e}
@@ -2372,6 +2376,7 @@ function TaskDialog({
       onClose={onClose}
       wide
     >
+      <TaskIdentity task={current} />
       <TaskTiming task={current} />
       <p className="timing-note">
         累计耗时为各候选或步骤的生成耗时之和，不含排队、准备素材和保存结果。标注“约”的时间来自本机观测。
@@ -2388,6 +2393,7 @@ function TaskDialog({
                 {labels[e.execution_state]} / {labels[e.storage_state]}
               </span>
             </div>
+            <ExecutionIdentity execution={e} />
             <ExecutionTiming execution={e} />
             <details className="task-parameters" open>
               <summary>完整参数</summary>

@@ -40,6 +40,7 @@ from .schemas import (
     ProjectCreate,
     ProjectUpdate,
 )
+from .task_identity import execution_identity
 from .task_timing import execution_timing
 from .worker import TERMINAL
 
@@ -550,12 +551,13 @@ async def tasks(request: Request, project_id: str | None = None, limit: int = Qu
                     **row_dict(t),
                     "tool_name": "生成视频"
                     if any(e.configuration.get("step_count", 1) > 1 for e in es)
-                    else svc(request).registry.get(es[0].tool_id)["name"]
+                    else execution_identity(es[0], svc(request).registry)["tool_name"]
                     if es
                     else "",
                     "executions": [
                         {
                             "timing": execution_timing(e),
+                            **execution_identity(e, svc(request).registry),
                             **{
                                 k: v
                                 for k, v in row_dict(e).items()
@@ -582,7 +584,12 @@ async def task_detail(request: Request, task_id: str):
         for e in es:
             records = (await s.scalars(select(Artifact).where(Artifact.execution_id == e.id))).all()
             result["executions"].append(
-                {**row_dict(e), "timing": execution_timing(e), "artifacts": [row_dict(a) for a in records]}
+                {
+                    **row_dict(e),
+                    "timing": execution_timing(e),
+                    **execution_identity(e, svc(request).registry),
+                    "artifacts": [row_dict(a) for a in records],
+                }
             )
         return result
 

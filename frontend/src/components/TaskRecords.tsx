@@ -41,6 +41,86 @@ const valueNames: Record<string, string> = {
   max: "最大尺寸",
 };
 
+const modelRoles: Record<string, string> = {
+  main: "主模型",
+  lora: "LoRA",
+  encoder: "文本编码器",
+  vae: "VAE",
+};
+
+export function ExecutionIdentity({
+  execution,
+  compact = false,
+}: {
+  execution: Data;
+  compact?: boolean;
+}) {
+  const models: Data[] = execution.models ?? [];
+  const mainModels = models.filter((m) => ["main", "lora"].includes(m.role));
+  const supportingModels = models.filter(
+    (m) => !["main", "lora"].includes(m.role),
+  );
+  const source = execution.model_source;
+  const modelLabel =
+    source === "planned"
+      ? "计划使用模型"
+      : source === "submitted"
+        ? "提交模型"
+        : "实际使用模型";
+  const renderModel = (model: Data) => (
+    <div className="execution-model" key={`${model.role}:${model.name}`}>
+      <span>{modelRoles[model.role] ?? model.role}</span>
+      <strong>{model.name}</strong>
+    </div>
+  );
+  return (
+    <div className={`execution-identity ${compact ? "compact" : ""}`}>
+      <div className="execution-tool-heading">
+        <span>创作工具</span>
+        <strong>{execution.tool_name ?? execution.tool_id}</strong>
+        <small>v{execution.tool_version}</small>
+      </div>
+      <div className="execution-models">
+        <span className="execution-model-label">{modelLabel}</span>
+        {mainModels.map(renderModel)}
+        {!models.length && <p className="model-unavailable">暂无模型记录</p>}
+        {!!supportingModels.length && (
+          <details className="supporting-models" open={!compact}>
+            <summary>编码器与 VAE（{supportingModels.length}）</summary>
+            {supportingModels.map(renderModel)}
+          </details>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function TaskIdentity({ task }: { task: Data }) {
+  const groups = new Map<string, Data>();
+  for (const execution of task.executions ?? []) {
+    const key = JSON.stringify([
+      execution.tool_id,
+      execution.tool_version,
+      execution.models,
+      execution.model_source,
+      execution.configuration?.step_index,
+    ]);
+    if (!groups.has(key)) groups.set(key, execution);
+  }
+  return (
+    <div className="task-identity">
+      {[...groups.values()].map((execution) => (
+        <div key={execution.id}>
+          {(groups.size > 1 || execution.configuration?.step_count > 1) && (
+            <p className="identity-step">{executionLabel(execution)}</p>
+          )}
+          <ExecutionIdentity execution={execution} compact />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function duration(seconds: number) {
   const total = Math.max(0, Math.floor(seconds));
   const hours = Math.floor(total / 3600);
@@ -222,9 +302,6 @@ export function ExecutionParameters({
   );
   return (
     <div className="execution-parameters">
-      <p className="execution-tool">
-        {tool?.name ?? execution.tool_id} · v{execution.tool_version}
-      </p>
       <dl className="execution-parameter-grid">
         {Object.entries(params).map(([key, value]) => (
           <div

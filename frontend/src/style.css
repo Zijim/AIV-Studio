@@ -1334,11 +1334,88 @@ details small {
   font-size: 12px;
   font-weight: 500;
 }
-.execution-tool {
-  color: #9298a4;
+.task-identity {
+  margin: 0 0 12px;
+}
+.task-identity > div + div {
+  margin-top: 12px;
+}
+.identity-step {
+  color: #bab0a4;
+  font-size: 11px;
+  margin: 0 0 7px;
+}
+.execution-identity {
+  border: 1px solid #464034;
+  border-radius: 7px;
+  background: #28251f;
+  padding: 12px 14px;
+  margin: 12px 0 2px;
+}
+.execution-identity.compact {
+  background: #24231f;
+  margin: 0;
+}
+.execution-tool-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 7px 12px;
+}
+.execution-tool-heading > span,
+.execution-model-label {
+  color: #b1a28f;
   font-size: 10px;
-  margin: 7px 0;
+}
+.execution-tool-heading > strong {
+  font-size: 14px;
+  font-weight: 550;
+  color: #f0cda4;
+}
+.execution-tool-heading > small {
+  font-size: 10px;
+  color: #a49b8f;
+}
+.execution-models {
+  margin-top: 10px;
+}
+.execution-model-label {
+  display: block;
+  margin-bottom: 5px;
+}
+.execution-model {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  padding: 3px 0;
   overflow-wrap: anywhere;
+}
+.execution-model > span {
+  font-size: 10px;
+  color: #a49b8f;
+  min-width: 52px;
+}
+.execution-model > strong {
+  font-size: 12px;
+  color: #e5d8c7;
+  font-weight: 500;
+  min-width: 0;
+}
+.supporting-models > summary {
+  font-size: 10px;
+  cursor: pointer;
+  color: #b1a28f;
+  padding: 5px 0;
+}
+.supporting-models .execution-model > strong {
+  color: #bdb6ad;
+  font-size: 11px;
+}
+.model-unavailable {
+  color: #a49b8f;
+  font-size: 11px;
+  margin: 5px 0 0;
 }
 .execution-parameter-grid {
   display: grid;

@@ -162,6 +162,11 @@ class TimingIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(row.finished_at, event_time(9999999))
 
     async def test_list_and_detail_derive_times_for_old_records_and_keep_parameters(self):
+        async with self.db.transaction() as session:
+            row = await session.get(Execution, "execution")
+            row.executed_payload = {
+                "model": {"class_type": "UNETLoader", "inputs": {"unet_name": "recorded-model.safetensors"}},
+            }
         registry = SimpleNamespace(get=lambda *_: {"name": "快速文生图"})
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=self.db, registry=registry)))
         listing = await tasks(request, project_id="project", limit=80)
@@ -169,6 +174,9 @@ class TimingIntegrationTests(unittest.IsolatedAsyncioTestCase):
         for item in (listing[0]["executions"][0], detail["executions"][0]):
             self.assertEqual(item["timing"]["elapsed_seconds"], 60.5)
             self.assertEqual(item["parameters"]["prompt"], "测试")
+            self.assertEqual(item["tool_name"], "快速文生图")
+            self.assertEqual(item["model_source"], "executed")
+            self.assertEqual(item["models"], [{"role": "main", "name": "recorded-model.safetensors"}])
         self.assertNotIn("history", listing[0]["executions"][0])
         self.assertIn("history", detail["executions"][0])
 
