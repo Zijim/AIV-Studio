@@ -59,15 +59,7 @@ import {
 } from "./lib";
 import { Button, Empty, Modal } from "./components/ui";
 import { ConversationSwitcher } from "./components/ConversationSwitcher";
-import {
-  TaskTiming,
-  TaskIdentity,
-  ExecutionIdentity,
-  ExecutionTiming,
-  ExecutionParameters,
-  executionLabel,
-  parameterSummary,
-} from "./components/TaskRecords";
+import { TaskQueue, TaskAssetPreview } from "./components/TaskQueue";
 import {
   CreativeSummary,
   PlanInputs,
@@ -113,7 +105,15 @@ export default function App() {
   const [busy, setBusy] = useState(""),
     [toast, setToast] = useState("");
   const [importResult, setImportResult] = useState<Data | null>(null);
-  const [taskDetail, setTaskDetail] = useState<Data | null>(null);
+  const [taskPreview, setTaskPreview] = useState<Data | null>(null);
+  const [locatedAsset, setLocatedAsset] = useState<Data | null>(null);
+  const [focusTaskId, setFocusTaskId] = useState<string | null>(null);
+  const [returnTaskId, setReturnTaskId] = useState<string | null>(null);
+  const libraryRef = useRef<HTMLDivElement>(null);
+  const libraryScroll = useRef(0);
+  const lastAssetLink = useRef("");
+  const browsingTaskMedia = useRef(false);
+  browsingTaskMedia.current = !!locatedAsset || !!taskPreview;
   const files = useRef<HTMLInputElement>(null),
     folders = useRef<HTMLInputElement>(null);
   const chatEnd = useRef<HTMLDivElement>(null);
@@ -265,13 +265,18 @@ export default function App() {
       conversationItems[0];
     if (!value) return;
     if (store.conversationId !== value.id) store.chooseConversation(value.id);
-    if (requested !== value.id)
-      navigate(`/projects/${project.id}?conversation=${value.id}`, {
-        replace: true,
-      });
+    if (requested !== value.id) {
+      const params = new URLSearchParams(location.search);
+      params.set("conversation", value.id);
+      navigate(`/projects/${project.id}?${params}`, { replace: true });
+    }
   }, [project?.id, conversations.data, location.search, location.pathname]);
   useEffect(() => {
     setFocus(null);
+    setLocatedAsset(null);
+    setTaskPreview(null);
+    setFocusTaskId(null);
+    setReturnTaskId(null);
     setTrash(false);
     setSearch("");
   }, [store.projectId]);
@@ -302,6 +307,7 @@ export default function App() {
         api(`/assets/${update.entity_id}`)
           .then((asset) => {
             if (
+              !browsingTaskMedia.current &&
               asset.role === "final" &&
               asset.presence === "available" &&
               asset.conversation_id ===
@@ -328,7 +334,7 @@ export default function App() {
               ? ["conversations"]
               : type.startsWith("project.")
                 ? ["projects", "assets"]
-                : ["assets", "detail"];
+                : ["assets", "detail", "tasks", "task-detail"];
       keys.forEach((key) => queryClient.invalidateQueries({ queryKey: [key] }));
     };
     return () => source.close();
@@ -347,6 +353,146 @@ export default function App() {
       if (fresh) setFocus(fresh);
     }
   }, [assets.data]);
+
+  function clearLocatedAsset() {
+    setLocatedAsset(null);
+    const params = new URLSearchParams(location.search);
+    params.delete("asset");
+    params.delete("from_task");
+    navigate(`${location.pathname}?${params}`, { replace: true });
+    requestAnimationFrame(() => {
+      if (libraryRef.current)
+        libraryRef.current.scrollTop = libraryScroll.current;
+    });
+  }
+
+  function returnToTask() {
+    clearLocatedAsset();
+    setTaskPreview(null);
+    store.setTaskOpen(true);
+    setReturnTaskId(null);
+  }
+
+  async function locateTaskAsset(item: Data, task: Data) {
+    const targetProject = store.projectId;
+    await action("locate-asset", async () => {
+      const asset = await api(`/assets/${item.asset_id}`);
+      if (useWorkspace.getState().projectId !== targetProject) return;
+      const membership = asset.projects?.find(
+        (m: Data) => m.project_id === store.projectId,
+      );
+      if (!membership)
+        throw new Error("此素材不属于当前项目，无法在本项目定位。");
+      if (item.presence === "changed")
+        throw new Error("素材版本与任务记录不一致，不能定位为原输入。");
+      libraryScroll.current = libraryRef.current?.scrollTop ?? 0;
+      const value = {
+        ...asset,
+        project: membership,
+        project_removed: !!membership.removed_at,
+      };
+      setLocatedAsset(value);
+      setFocus(value);
+      setReturnTaskId(task.id);
+      setTaskPreview(null);
+      store.setTaskOpen(false);
+      const params = new URLSearchParams(location.search);
+      params.set("asset", asset.id);
+      params.set("from_task", task.id);
+      params.delete("task");
+      lastAssetLink.current = `${store.projectId}:${asset.id}:${task.id}:`;
+      navigate(`${location.pathname}?${params}`, { replace: true });
+    });
+  }
+
+  async function openSourceTask(taskId: string) {
+    await action("source-task", async () => {
+      const task = await api(`/tasks/${taskId}`);
+      const params =
+        task.project_id === store.projectId
+          ? new URLSearchParams(location.search)
+          : new URLSearchParams();
+      params.delete("asset");
+      params.delete("from_task");
+      params.set("task", taskId);
+      setModal(null);
+      setReturnTaskId(null);
+      if (task.project_id === store.projectId) {
+        setFocusTaskId(taskId);
+        setLocatedAsset(null);
+        store.setTaskOpen(true);
+        lastAssetLink.current = "";
+      }
+      navigate(`/projects/${task.project_id}?${params}`);
+    });
+  }
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const assetId = params.get("asset"),
+      fromTask = params.get("from_task"),
+      taskId = params.get("task");
+    if (!assetId && !taskId) lastAssetLink.current = "";
+    if (
+      !project ||
+      (!assetId && !taskId) ||
+      location.pathname !== `/projects/${project.id}`
+    )
+      return;
+    const key = `${project.id}:${assetId ?? ""}:${fromTask ?? ""}:${taskId ?? ""}`;
+    if (lastAssetLink.current === key) return;
+    lastAssetLink.current = key;
+    let cancelled = false;
+    let settled = false;
+    (async () => {
+      try {
+        if (assetId) {
+          const asset = await api(`/assets/${assetId}`);
+          const membership = asset.projects?.find(
+            (m: Data) => m.project_id === project.id,
+          );
+          if (!membership) throw new Error("链接中的素材不属于当前项目。");
+          if (fromTask) {
+            const task = await api(`/tasks/${fromTask}`);
+            if (task.project_id !== project.id)
+              throw new Error("来源任务不属于当前项目。");
+            const related = Object.values(task.media ?? {}).flat() as Data[];
+            const reference = related.find((item) => item.asset_id === assetId);
+            if (!reference) throw new Error("此素材不属于链接中的来源任务。");
+            if (reference.presence === "changed")
+              throw new Error("素材版本与任务输入不一致。");
+          }
+          if (cancelled) return;
+          libraryScroll.current = libraryRef.current?.scrollTop ?? 0;
+          const value = {
+            ...asset,
+            project: membership,
+            project_removed: !!membership.removed_at,
+          };
+          setLocatedAsset(value);
+          setFocus(value);
+          setReturnTaskId(fromTask);
+          store.setTaskOpen(false);
+        } else if (taskId) {
+          const task = await api(`/tasks/${taskId}`);
+          if (task.project_id !== project.id)
+            throw new Error("链接中的任务不属于当前项目。");
+          if (cancelled) return;
+          setFocusTaskId(taskId);
+          setLocatedAsset(null);
+          store.setTaskOpen(true);
+        }
+      } catch (error) {
+        if (!cancelled) setToast((error as Error).message);
+      } finally {
+        settled = true;
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (!settled && lastAssetLink.current === key) lastAssetLink.current = "";
+    };
+  }, [project?.id, location.search, location.pathname]);
 
   async function importFiles(list: FileList | File[]) {
     if (!writable || !list.length) return;
@@ -563,6 +709,7 @@ export default function App() {
             </h2>
             <Button
               title={trash ? "返回素材" : "素材回收站"}
+              disabled={!!locatedAsset}
               onClick={() => setTrash(!trash)}
             >
               <Trash2 size={15} />
@@ -572,6 +719,7 @@ export default function App() {
             <Search size={15} />
             <input
               aria-label="搜索素材"
+              disabled={!!locatedAsset}
               placeholder="搜索名称、备注、描述…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -587,13 +735,45 @@ export default function App() {
               <button
                 key={value}
                 className={filter === value ? "active" : ""}
+                disabled={!!locatedAsset}
                 onClick={() => setFilter(value)}
               >
                 {label}
               </button>
             ))}
           </div>
-          <div className="asset-library">
+          {locatedAsset && (
+            <div className="located-asset-panel">
+              <div className="located-asset-notice">
+                <strong>已定位关联素材</strong>
+                <span>原筛选、分页和附图选择已保留</span>
+              </div>
+              <button
+                className="asset-card located-asset-card"
+                onClick={() => setModal("preview")}
+                aria-label={`预览已定位素材：${locatedAsset.name}`}
+              >
+                <div className="asset-thumb">
+                  <Thumb asset={locatedAsset} />
+                </div>
+                <div className="asset-caption">
+                  <span>{locatedAsset.name}</span>
+                  <small>
+                    {locatedAsset.project_removed
+                      ? "已从项目移除 · 只读查看"
+                      : "当前定位"}
+                  </small>
+                </div>
+              </button>
+              <Button onClick={clearLocatedAsset}>返回原列表</Button>
+              {returnTaskId && <Button onClick={returnToTask}>返回任务</Button>}
+            </div>
+          )}
+          <div
+            className="asset-library"
+            ref={libraryRef}
+            hidden={!!locatedAsset}
+          >
             {allAssets.map((a) => (
               <button
                 key={a.id}
@@ -651,7 +831,7 @@ export default function App() {
             )}
           </div>
           {(assets.data?.total || 0) > 100 && (
-            <div className="pagination">
+            <div className="pagination" hidden={!!locatedAsset}>
               <Button disabled={page === 0} onClick={() => setPage(page - 1)}>
                 上一页
               </Button>
@@ -730,12 +910,18 @@ export default function App() {
             <div>
               <span className="eyebrow">创作画布</span>
               <span className="canvas-title">
-                {selected.length > 1
+                {!locatedAsset && selected.length > 1
                   ? `已选择 ${selected.length} 份素材`
                   : focus?.name || "把想法变成画面"}
               </span>
             </div>
             <div className="canvas-buttons">
+              {returnTaskId && (
+                <Button onClick={returnToTask}>
+                  <Layers3 size={14} />
+                  返回任务
+                </Button>
+              )}
               {focus && (
                 <>
                   <Button title="素材详情" onClick={() => setModal("asset")}>
@@ -763,7 +949,7 @@ export default function App() {
                   新建项目
                 </Button>
               </Empty>
-            ) : selected.length > 1 ? (
+            ) : !locatedAsset && selected.length > 1 ? (
               <div className="contact-sheet">
                 {selected.map((a) => (
                   <div
@@ -1359,120 +1545,41 @@ export default function App() {
             bytes(health.data.storage.free_bytes) + " 可用"}
         </div>
       </footer>
-      {store.taskOpen && (
-        <div className="task-drawer">
-          <div className="drawer-heading">
-            <h2>任务与结果</h2>
-            <span>候选串行执行，取消只影响本应用对应任务</span>
-            <Button onClick={() => store.setTaskOpen(false)}>
-              <X size={17} />
-            </Button>
-          </div>
-          {tasks.data?.length ? (
-            tasks.data.map((t) => (
-              <div className="task-item" key={t.id}>
-                <div className="task-row">
-                  <div className={`task-state ${t.state}`}>
-                    {activeStates.includes(t.state) ? (
-                      <LoaderCircle className="spin" size={17} />
-                    ) : t.state === "completed" ? (
-                      <Check size={17} />
-                    ) : (
-                      <Circle size={17} />
-                    )}
-                  </div>
-                  <div className="task-name">
-                    <strong>{t.tool_name}</strong>
-                    <small>
-                      {clock(t.created_at)} · {t.candidate_count} 个候选
-                    </small>
-                  </div>
-                  <span className="task-label">{labels[t.state]}</span>
-                  {t.conversation_id && (
-                    <button
-                      className="task-conversation-link"
-                      onClick={() => {
-                        const target = conversationItems.find(
-                          (c) => c.id === t.conversation_id,
-                        );
-                        if (target) {
-                          chooseConversation(target);
-                          store.setTaskOpen(false);
-                        }
-                      }}
-                      title="返回任务所属对话"
-                    >
-                      {conversationItems.find((c) => c.id === t.conversation_id)
-                        ?.title ?? "所属对话"}
-                    </button>
-                  )}
-                  <div className="task-progress">
-                    {t.executions.find(
-                      (e: Data) => !TERMINAL_UI.includes(e.execution_state),
-                    )?.progress.stage ||
-                      t.error?.message ||
-                      "执行与保存记录已留存"}
-                  </div>
-                  <Button
-                    onClick={() =>
-                      action("detail", async () => {
-                        setTaskDetail(await api(`/tasks/${t.id}`));
-                        setModal("task");
-                      })
-                    }
-                  >
-                    详情
-                  </Button>
-                  {activeStates.includes(t.state) && (
-                    <Button
-                      variant="danger"
-                      disabled={!!busy || t.cancel_requested}
-                      onClick={() =>
-                        action("cancel", () =>
-                          api(`/tasks/${t.id}/cancel`, "POST"),
-                        )
-                      }
-                    >
-                      取消
-                    </Button>
-                  )}
-                </div>
-                <div className="task-row-record">
-                  <TaskIdentity task={t} />
-                  <TaskTiming task={t} compact />
-                  <details className="task-parameters">
-                    <summary>
-                      查看完整参数{" "}
-                      <span>
-                        {parameterSummary(
-                          t.executions.find(
-                            (e: Data) =>
-                              !TERMINAL_UI.includes(e.execution_state),
-                          ) ?? t.executions.at(-1),
-                        )}
-                      </span>
-                    </summary>
-                    {t.executions.map((e: Data) => (
-                      <section className="queue-execution" key={e.id}>
-                        <strong>{executionLabel(e)}</strong>
-                        <ExecutionIdentity execution={e} />
-                        <ExecutionTiming execution={e} />
-                        <ExecutionParameters
-                          execution={e}
-                          tools={tools.data ?? []}
-                        />
-                      </section>
-                    ))}
-                  </details>
-                </div>
-              </div>
-            ))
-          ) : (
-            <Empty icon={<Clock3 />} title="还没有任务">
-              准备一个方案并确认执行，结果会自动归档。
-            </Empty>
-          )}
-        </div>
+      <TaskQueue
+        open={store.taskOpen}
+        tasks={tasks.data ?? []}
+        tools={tools.data ?? []}
+        conversations={conversationItems}
+        focusedId={focusTaskId}
+        onClose={() => {
+          store.setTaskOpen(false);
+          setFocusTaskId(null);
+        }}
+        onConversation={(value) => {
+          chooseConversation(value);
+          store.setTaskOpen(false);
+        }}
+        action={action}
+        onPlan={(p) => {
+          const owner = conversationItems.find(
+            (c) => c.id === p.conversation_id,
+          );
+          if (owner) chooseConversation(owner);
+          refresh();
+          setToast("重做方案已准备，请确认执行");
+          store.setTaskOpen(false);
+        }}
+        onPreview={(asset, task) => setTaskPreview({ asset, task })}
+        onLocate={locateTaskAsset}
+      />
+      {taskPreview && (
+        <TaskAssetPreview
+          key={taskPreview.asset.key}
+          asset={taskPreview.asset}
+          task={taskPreview.task}
+          onClose={() => setTaskPreview(null)}
+          onLocate={locateTaskAsset}
+        />
       )}
       {toast && (
         <div className="toast" role="status">
@@ -1595,6 +1702,7 @@ export default function App() {
           onClose={() => setModal(null)}
           action={action}
           onLineage={() => setModal("lineage")}
+          onSourceTask={openSourceTask}
         />
       )}
       {modal === "preview" && focus && (
@@ -1606,24 +1714,6 @@ export default function App() {
       )}
       {modal === "lineage" && focus && (
         <LineageDialog asset={focus} onClose={() => setModal(null)} />
-      )}
-      {modal === "task" && taskDetail && (
-        <TaskDialog
-          task={taskDetail}
-          tools={tools.data ?? []}
-          onClose={() => setModal(null)}
-          action={action}
-          onPlan={(p) => {
-            const owner = conversationItems.find(
-              (c) => c.id === p.conversation_id,
-            );
-            if (owner) chooseConversation(owner);
-            refresh();
-            setModal(null);
-            setToast("重做方案已准备，请确认执行");
-            store.setTaskOpen(false);
-          }}
-        />
       )}
       {modal === "import-result" && (
         <Modal title="导入结果" onClose={() => setModal(null)}>
@@ -1679,6 +1769,19 @@ type Action = (
   success?: string,
 ) => Promise<unknown>;
 function Media({ asset }: { asset: Data }) {
+  const [cachedFailed, setCachedFailed] = useState(false);
+  useEffect(() => setCachedFailed(false), [asset.id]);
+  if (asset.presence !== "available" && asset.preview_url && !cachedFailed)
+    return (
+      <div className="cached-media-preview">
+        <p>原文件不可用，仅显示已保存的预览</p>
+        <img
+          src={asset.preview_url}
+          alt={asset.name}
+          onError={() => setCachedFailed(true)}
+        />
+      </div>
+    );
   if (asset.presence !== "available")
     return (
       <Empty icon={<FileText size={30} />} title={labels[asset.presence]}>
@@ -2079,12 +2182,14 @@ function AssetDialog({
   onClose,
   action,
   onLineage,
+  onSourceTask,
 }: {
   asset: Data;
   project: Data;
   onClose: () => void;
   action: Action;
   onLineage: () => void;
+  onSourceTask: (taskId: string) => void;
 }) {
   const detail = useQuery({
     queryKey: ["detail", asset.id],
@@ -2144,6 +2249,12 @@ function AssetDialog({
         />
       </label>
       {detail.data?.execution && (
+        <Button onClick={() => onSourceTask(detail.data!.execution.task_id)}>
+          <Layers3 size={14} />
+          来源任务 · 候选 {detail.data.execution.candidate_index + 1}
+        </Button>
+      )}
+      {detail.data?.execution && (
         <details>
           <summary>生成参数与记录</summary>
           <pre className="json-view">
@@ -2167,26 +2278,37 @@ function AssetDialog({
           <GitBranch size={15} />
           来源关系
         </Button>
-        {detail.data?.execution && asset.role === "final" && (
-          <Button
-            onClick={() =>
-              action(
-                "best",
-                () =>
-                  api(`/tasks/${detail.data!.execution.task_id}/best`, "POST", {
-                    asset_id: asset.id,
-                  }),
-                "已标记为最佳候选",
-              )
-            }
-          >
-            <Star size={15} />
-            最佳候选
-          </Button>
-        )}
+        {detail.data?.execution &&
+          asset.role === "final" &&
+          !asset.source_info?.internal_preparation &&
+          !(
+            detail.data.execution.configuration?.step_count > 1 &&
+            detail.data.execution.configuration?.step_index === 0
+          ) && (
+            <Button
+              disabled={!!project.archived_at || !!asset.project?.removed_at}
+              onClick={() =>
+                action(
+                  "best",
+                  () =>
+                    api(
+                      `/tasks/${detail.data!.execution.task_id}/best`,
+                      "POST",
+                      {
+                        asset_id: asset.id,
+                      },
+                    ),
+                  "已标记为最佳候选",
+                )
+              }
+            >
+              <Star size={15} />
+              最佳候选
+            </Button>
+          )}
         <Button
           variant="primary"
-          disabled={!!project.archived_at}
+          disabled={!!project.archived_at || !!asset.project?.removed_at}
           onClick={() =>
             action("note", async () => {
               await api(`/projects/${project.id}/assets/${asset.id}`, "PATCH", {
@@ -2342,141 +2464,6 @@ function ReuseDialog({
         ))}
       </div>
       {!items.length && <Empty icon={<Copy />} title="暂无其他项目素材" />}
-    </Modal>
-  );
-}
-
-function TaskDialog({
-  task,
-  tools,
-  onClose,
-  action,
-  onPlan,
-}: {
-  task: Data;
-  tools: Data[];
-  onClose: () => void;
-  action: Action;
-  onPlan: (p: Data) => void;
-}) {
-  const queryClient = useQueryClient();
-  const detail = useQuery({
-    queryKey: ["task-detail", task.id],
-    queryFn: () => api(`/tasks/${task.id}`),
-    initialData: task,
-    refetchInterval: 5000,
-  });
-  const current = detail.data;
-  const setCurrent = (value: Data) =>
-    queryClient.setQueryData(["task-detail", task.id], value);
-  return (
-    <Modal
-      title="任务详情"
-      description={`${labels[current.state]} · ${clock(current.created_at)}`}
-      onClose={onClose}
-      wide
-    >
-      <TaskIdentity task={current} />
-      <TaskTiming task={current} />
-      <p className="timing-note">
-        累计耗时为各候选或步骤的生成耗时之和，不含排队、准备素材和保存结果。标注“约”的时间来自本机观测。
-      </p>
-      {detail.isError && (
-        <p className="error-text">详情刷新失败，正在显示上次记录。</p>
-      )}
-      <div className="execution-list">
-        {current.executions.map((e: Data) => (
-          <div className="execution-card" key={e.id}>
-            <div className="execution-heading">
-              <strong>{executionLabel(e)}</strong>
-              <span>
-                {labels[e.execution_state]} / {labels[e.storage_state]}
-              </span>
-            </div>
-            <ExecutionIdentity execution={e} />
-            <ExecutionTiming execution={e} />
-            <details className="task-parameters" open>
-              <summary>完整参数</summary>
-              <ExecutionParameters execution={e} tools={tools} />
-            </details>
-            {e.error && <p className="error-text">{e.error.message}</p>}
-            <div className="artifact-list">
-              {e.artifacts?.map((a: Data) => (
-                <div key={a.id}>
-                  <span>
-                    {labels[a.role]} · {a.reference.filename}
-                  </span>
-                  <span>
-                    {labels[a.state] || a.state}
-                    {a.error ? " · " + a.error : ""}
-                  </span>
-                </div>
-              ))}
-            </div>
-            <div className="execution-actions">
-              {TERMINAL_UI.includes(e.execution_state) && (
-                <Button
-                  onClick={() =>
-                    action(
-                      "collect",
-                      async () =>
-                        setCurrent(
-                          await api(`/executions/${e.id}/collect`, "POST"),
-                        ),
-                      "已核实并补存现有输出",
-                    )
-                  }
-                >
-                  <ArrowDownToLine size={14} />
-                  补存输出
-                </Button>
-              )}
-              {["unknown", "interrupted"].includes(e.execution_state) && (
-                <Button
-                  onClick={() =>
-                    action(
-                      "reconcile",
-                      () => api(`/executions/${e.id}/reconcile`, "POST"),
-                      "正在重新核实服务器记录",
-                    )
-                  }
-                >
-                  <RefreshCw size={14} />
-                  核实状态
-                </Button>
-              )}
-            </div>
-            <details>
-              <summary>请求、历史与输出证据</summary>
-              <pre className="json-view">{JSON.stringify(e, null, 2)}</pre>
-            </details>
-          </div>
-        ))}
-      </div>
-      <div className="modal-actions">
-        <Button
-          onClick={() =>
-            action("task-refresh", async () =>
-              setCurrent(await api(`/tasks/${task.id}`)),
-            )
-          }
-        >
-          <RefreshCw size={14} />
-          刷新
-        </Button>
-        {!activeStates.includes(current.state) && (
-          <Button
-            variant="primary"
-            onClick={() =>
-              action("retry", async () =>
-                onPlan(await api(`/tasks/${task.id}/retry`, "POST")),
-              )
-            }
-          >
-            准备重做方案
-          </Button>
-        )}
-      </div>
     </Modal>
   );
 }

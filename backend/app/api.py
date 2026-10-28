@@ -41,6 +41,7 @@ from .schemas import (
     ProjectUpdate,
 )
 from .task_identity import execution_identity
+from .task_media import resolve_task_media
 from .task_timing import execution_timing
 from .worker import TERMINAL
 
@@ -541,14 +542,29 @@ async def tasks(request: Request, project_id: str | None = None, limit: int = Qu
         query = select(Task).order_by(Task.queue_seq.desc()).limit(limit)
         if project_id:
             query = query.where(Task.project_id == project_id)
+        task_rows = list((await s.scalars(query)).all())
+        execution_rows = list(
+            await s.scalars(
+                select(Execution)
+                .where(Execution.task_id.in_([t.id for t in task_rows]))
+                .order_by(Execution.candidate_index)
+            )
+        )
+        task_media, execution_media, titles = await resolve_task_media(
+            s,
+            task_rows,
+            execution_rows,
+            getattr(svc(request), "storage", None),
+            svc(request).registry,
+        )
         result = []
-        for t in (await s.scalars(query)).all():
-            es = (
-                await s.scalars(select(Execution).where(Execution.task_id == t.id).order_by(Execution.candidate_index))
-            ).all()
+        for t in task_rows:
+            es = [e for e in execution_rows if e.task_id == t.id]
             result.append(
                 {
                     **row_dict(t),
+                    "title": titles.get(t.id, ""),
+                    "media": task_media.get(t.id, {}),
                     "tool_name": "生成视频"
                     if any(e.configuration.get("step_count", 1) > 1 for e in es)
                     else execution_identity(es[0], svc(request).registry)["tool_name"]
@@ -557,6 +573,7 @@ async def tasks(request: Request, project_id: str | None = None, limit: int = Qu
                     "executions": [
                         {
                             "timing": execution_timing(e),
+                            "media": execution_media[e.id],
                             **execution_identity(e, svc(request).registry),
                             **{
                                 k: v
@@ -580,13 +597,21 @@ async def task_detail(request: Request, task_id: str):
         es = (
             await s.scalars(select(Execution).where(Execution.task_id == task_id).order_by(Execution.candidate_index))
         ).all()
-        result = {**row_dict(t), "executions": []}
+        task_media, execution_media, titles = await resolve_task_media(
+            s,
+            [t],
+            es,
+            getattr(svc(request), "storage", None),
+            svc(request).registry,
+        )
+        result = {**row_dict(t), "title": titles.get(t.id, ""), "media": task_media.get(t.id, {}), "executions": []}
         for e in es:
             records = (await s.scalars(select(Artifact).where(Artifact.execution_id == e.id))).all()
             result["executions"].append(
                 {
                     **row_dict(e),
                     "timing": execution_timing(e),
+                    "media": execution_media[e.id],
                     **execution_identity(e, svc(request).registry),
                     "artifacts": [row_dict(a) for a in records],
                 }
