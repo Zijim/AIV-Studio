@@ -60,6 +60,13 @@ import {
 import { Button, Empty, Modal } from "./components/ui";
 import { ConversationSwitcher } from "./components/ConversationSwitcher";
 import {
+  TaskTiming,
+  ExecutionTiming,
+  ExecutionParameters,
+  executionLabel,
+  parameterSummary,
+} from "./components/TaskRecords";
+import {
   CreativeSummary,
   PlanInputs,
   PromptDetails,
@@ -310,7 +317,7 @@ export default function App() {
           .catch(() => {});
       }
       const keys = type.startsWith("task.")
-        ? ["tasks", "turns", "conversations"]
+        ? ["tasks", "task-detail", "turns", "conversations"]
         : type.startsWith("plan.")
           ? ["plans", "conversations"]
           : type.startsWith("message.") || type.startsWith("turn.")
@@ -1361,71 +1368,99 @@ export default function App() {
           </div>
           {tasks.data?.length ? (
             tasks.data.map((t) => (
-              <div className="task-row" key={t.id}>
-                <div className={`task-state ${t.state}`}>
-                  {activeStates.includes(t.state) ? (
-                    <LoaderCircle className="spin" size={17} />
-                  ) : t.state === "completed" ? (
-                    <Check size={17} />
-                  ) : (
-                    <Circle size={17} />
+              <div className="task-item" key={t.id}>
+                <div className="task-row">
+                  <div className={`task-state ${t.state}`}>
+                    {activeStates.includes(t.state) ? (
+                      <LoaderCircle className="spin" size={17} />
+                    ) : t.state === "completed" ? (
+                      <Check size={17} />
+                    ) : (
+                      <Circle size={17} />
+                    )}
+                  </div>
+                  <div className="task-name">
+                    <strong>{t.tool_name}</strong>
+                    <small>
+                      {clock(t.created_at)} · {t.candidate_count} 个候选
+                    </small>
+                  </div>
+                  <span className="task-label">{labels[t.state]}</span>
+                  {t.conversation_id && (
+                    <button
+                      className="task-conversation-link"
+                      onClick={() => {
+                        const target = conversationItems.find(
+                          (c) => c.id === t.conversation_id,
+                        );
+                        if (target) {
+                          chooseConversation(target);
+                          store.setTaskOpen(false);
+                        }
+                      }}
+                      title="返回任务所属对话"
+                    >
+                      {conversationItems.find((c) => c.id === t.conversation_id)
+                        ?.title ?? "所属对话"}
+                    </button>
                   )}
-                </div>
-                <div className="task-name">
-                  <strong>{t.tool_name}</strong>
-                  <small>
-                    {clock(t.created_at)} · {t.candidate_count} 个候选
-                  </small>
-                </div>
-                <span className="task-label">{labels[t.state]}</span>
-                {t.conversation_id && (
-                  <button
-                    className="task-conversation-link"
-                    onClick={() => {
-                      const target = conversationItems.find(
-                        (c) => c.id === t.conversation_id,
-                      );
-                      if (target) {
-                        chooseConversation(target);
-                        store.setTaskOpen(false);
-                      }
-                    }}
-                    title="返回任务所属对话"
-                  >
-                    {conversationItems.find((c) => c.id === t.conversation_id)
-                      ?.title ?? "所属对话"}
-                  </button>
-                )}
-                <div className="task-progress">
-                  {t.executions.find(
-                    (e: Data) => !TERMINAL_UI.includes(e.execution_state),
-                  )?.progress.stage ||
-                    t.error?.message ||
-                    "执行与保存记录已留存"}
-                </div>
-                <Button
-                  onClick={() =>
-                    action("detail", async () => {
-                      setTaskDetail(await api(`/tasks/${t.id}`));
-                      setModal("task");
-                    })
-                  }
-                >
-                  详情
-                </Button>
-                {activeStates.includes(t.state) && (
+                  <div className="task-progress">
+                    {t.executions.find(
+                      (e: Data) => !TERMINAL_UI.includes(e.execution_state),
+                    )?.progress.stage ||
+                      t.error?.message ||
+                      "执行与保存记录已留存"}
+                  </div>
                   <Button
-                    variant="danger"
-                    disabled={!!busy || t.cancel_requested}
                     onClick={() =>
-                      action("cancel", () =>
-                        api(`/tasks/${t.id}/cancel`, "POST"),
-                      )
+                      action("detail", async () => {
+                        setTaskDetail(await api(`/tasks/${t.id}`));
+                        setModal("task");
+                      })
                     }
                   >
-                    取消
+                    详情
                   </Button>
-                )}
+                  {activeStates.includes(t.state) && (
+                    <Button
+                      variant="danger"
+                      disabled={!!busy || t.cancel_requested}
+                      onClick={() =>
+                        action("cancel", () =>
+                          api(`/tasks/${t.id}/cancel`, "POST"),
+                        )
+                      }
+                    >
+                      取消
+                    </Button>
+                  )}
+                </div>
+                <div className="task-row-record">
+                  <TaskTiming task={t} compact />
+                  <details className="task-parameters">
+                    <summary>
+                      查看完整参数{" "}
+                      <span>
+                        {parameterSummary(
+                          t.executions.find(
+                            (e: Data) =>
+                              !TERMINAL_UI.includes(e.execution_state),
+                          ) ?? t.executions.at(-1),
+                        )}
+                      </span>
+                    </summary>
+                    {t.executions.map((e: Data) => (
+                      <section className="queue-execution" key={e.id}>
+                        <strong>{executionLabel(e)}</strong>
+                        <ExecutionTiming execution={e} />
+                        <ExecutionParameters
+                          execution={e}
+                          tools={tools.data ?? []}
+                        />
+                      </section>
+                    ))}
+                  </details>
+                </div>
               </div>
             ))
           ) : (
@@ -1571,6 +1606,7 @@ export default function App() {
       {modal === "task" && taskDetail && (
         <TaskDialog
           task={taskDetail}
+          tools={tools.data ?? []}
           onClose={() => setModal(null)}
           action={action}
           onPlan={(p) => {
@@ -2308,16 +2344,27 @@ function ReuseDialog({
 
 function TaskDialog({
   task,
+  tools,
   onClose,
   action,
   onPlan,
 }: {
   task: Data;
+  tools: Data[];
   onClose: () => void;
   action: Action;
   onPlan: (p: Data) => void;
 }) {
-  const [current, setCurrent] = useState(task);
+  const queryClient = useQueryClient();
+  const detail = useQuery({
+    queryKey: ["task-detail", task.id],
+    queryFn: () => api(`/tasks/${task.id}`),
+    initialData: task,
+    refetchInterval: 5000,
+  });
+  const current = detail.data;
+  const setCurrent = (value: Data) =>
+    queryClient.setQueryData(["task-detail", task.id], value);
   return (
     <Modal
       title="任务详情"
@@ -2325,22 +2372,27 @@ function TaskDialog({
       onClose={onClose}
       wide
     >
+      <TaskTiming task={current} />
+      <p className="timing-note">
+        累计耗时为各候选或步骤的生成耗时之和，不含排队、准备素材和保存结果。标注“约”的时间来自本机观测。
+      </p>
+      {detail.isError && (
+        <p className="error-text">详情刷新失败，正在显示上次记录。</p>
+      )}
       <div className="execution-list">
         {current.executions.map((e: Data) => (
           <div className="execution-card" key={e.id}>
             <div className="execution-heading">
-              <strong>
-                {e.configuration?.step_label
-                  ? `步骤 ${e.configuration.step_index + 1} · ${e.configuration.step_label}`
-                  : `候选 ${e.candidate_index + 1}`}
-              </strong>
+              <strong>{executionLabel(e)}</strong>
               <span>
                 {labels[e.execution_state]} / {labels[e.storage_state]}
               </span>
             </div>
-            <small>
-              种子 {e.seed} · 工具 {e.tool_id} · v{e.tool_version}
-            </small>
+            <ExecutionTiming execution={e} />
+            <details className="task-parameters" open>
+              <summary>完整参数</summary>
+              <ExecutionParameters execution={e} tools={tools} />
+            </details>
             {e.error && <p className="error-text">{e.error.message}</p>}
             <div className="artifact-list">
               {e.artifacts?.map((a: Data) => (

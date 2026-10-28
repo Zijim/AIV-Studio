@@ -27,6 +27,7 @@ from .models import (
 )
 from .schemas import PARAMETER_MODELS
 from .storage import atomic_json, file_hash
+from .task_timing import event_time, history_times
 
 log = logging.getLogger("aiv.worker")
 TERMINAL = {"succeeded", "failed", "cancelled", "interrupted", "unknown"}
@@ -382,7 +383,14 @@ class Worker:
                         if data.get("prompt_id") not in (None, execution.prompt_id):
                             continue
                         kind = event.get("type")
-                        if kind == "executed":
+                        if kind == "execution_start" and data.get("prompt_id") == execution.prompt_id:
+                            async with self.db.session() as session:
+                                current = await session.get(Execution, execution_id)
+                            await self.update(
+                                execution_id,
+                                started_at=event_time(data.get("timestamp")) or current.started_at or now(),
+                            )
+                        elif kind == "executed":
                             await self.register_outputs(execution_id, {str(data["node"]): data.get("output", {})})
                             self.spawn(self.collect(execution_id))
                         elif kind == "progress" and time.monotonic() - last_progress >= 1:
@@ -443,13 +451,17 @@ class Worker:
                 "node_type": data.get("node_type"),
             }
         actual = history.get("prompt", [None, None, None])[2]
+        start, finish = history_times(history)
+        async with self.db.session() as session:
+            current = await session.get(Execution, execution_id)
         await self.update(
             execution_id,
             execution_state=state,
             history=history,
             executed_payload=actual,
             error=error,
-            finished_at=now(),
+            started_at=start or current.started_at,
+            finished_at=finish or current.finished_at or now(),
             progress={"stage": "正在保存结果"},
         )
         await asyncio.to_thread(

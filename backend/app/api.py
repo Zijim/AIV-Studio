@@ -40,6 +40,7 @@ from .schemas import (
     ProjectCreate,
     ProjectUpdate,
 )
+from .task_timing import execution_timing
 from .worker import TERMINAL
 
 router = APIRouter(prefix="/api/v1")
@@ -554,9 +555,12 @@ async def tasks(request: Request, project_id: str | None = None, limit: int = Qu
                     else "",
                     "executions": [
                         {
-                            k: v
-                            for k, v in row_dict(e).items()
-                            if k not in ("history", "submitted_payload", "executed_payload")
+                            "timing": execution_timing(e),
+                            **{
+                                k: v
+                                for k, v in row_dict(e).items()
+                                if k not in ("history", "submitted_payload", "executed_payload")
+                            },
                         }
                         for e in es
                     ],
@@ -577,7 +581,9 @@ async def task_detail(request: Request, task_id: str):
         result = {**row_dict(t), "executions": []}
         for e in es:
             records = (await s.scalars(select(Artifact).where(Artifact.execution_id == e.id))).all()
-            result["executions"].append({**row_dict(e), "artifacts": [row_dict(a) for a in records]})
+            result["executions"].append(
+                {**row_dict(e), "timing": execution_timing(e), "artifacts": [row_dict(a) for a in records]}
+            )
         return result
 
 
