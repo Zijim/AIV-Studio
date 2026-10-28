@@ -11,10 +11,12 @@ from sqlalchemy import String, and_, func, or_, select, text
 from .config import ROOT
 from .conversations import resolve_conversation
 from .errors import AppError
+from .media_delivery import file_etag, media_response, small_preview
 from .models import (
     Artifact,
     Asset,
     AssetRelation,
+    Blob,
     Event,
     Execution,
     ImportBatch,
@@ -393,33 +395,40 @@ async def asset_detail(request: Request, asset_id: str):
 @router.head("/assets/{asset_id}/content")
 @router.get("/assets/{asset_id}/content")
 async def asset_content(request: Request, asset_id: str, download: bool = False):
-    a, b, path = await svc(request).storage.blob_path(asset_id)
-    inline = (
-        not download
-        and a.media_type in ("image", "video", "audio")
-        and b.mime_type.startswith(("image/", "video/", "audio/"))
-        and b.mime_type != "image/svg+xml"
-    )
-    return FileResponse(
-        path,
-        media_type=b.mime_type,
-        filename=a.name,
-        content_disposition_type="inline" if inline else "attachment",
-        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=3600"},
-    )
+    async with svc(request).storage.file_lock:
+        a, b, path = await svc(request).storage.blob_path(asset_id)
+        inline = (
+            not download
+            and a.media_type in ("image", "video", "audio")
+            and b.mime_type.startswith(("image/", "video/", "audio/"))
+            and b.mime_type != "image/svg+xml"
+        )
+        return media_response(
+            request,
+            path,
+            etag=file_etag(path, b.sha256),
+            media_type=b.mime_type,
+            filename=a.name,
+            disposition="inline" if inline else "attachment",
+        )
 
 
 @router.head("/assets/{asset_id}/preview")
 @router.get("/assets/{asset_id}/preview")
 async def asset_preview(request: Request, asset_id: str):
-    async with svc(request).db.session() as s:
-        a = await s.get(Asset, asset_id)
-        if not a or not a.preview_path:
-            raise AppError("preview_missing", "预览不可用。", 404)
-        path = svc(request).storage.resolve("previews/" + a.preview_path)
-        if not path.exists():
-            raise AppError("preview_missing", "预览已缺失。", 404)
-        return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
+    state = svc(request)
+    # GC takes the same lock: a request cannot recreate a preview after purge.
+    async with state.storage.file_lock:
+        async with state.db.session() as s:
+            a = await s.get(Asset, asset_id)
+            blob = await s.get(Blob, a.blob_id) if a else None
+            if not a or not a.preview_path or not blob or blob.presence == "purged" or a.presence == "purged":
+                raise AppError("preview_missing", "预览不可用。", 404)
+            path = state.storage.resolve("previews/" + a.preview_path)
+            if not path.is_file():
+                raise AppError("preview_missing", "预览已缺失。", 404)
+            preview, mime, etag = await asyncio.to_thread(small_preview, path)
+            return media_response(request, preview, etag=etag, media_type=mime)
 
 
 @router.get("/assets/{asset_id}/lineage")

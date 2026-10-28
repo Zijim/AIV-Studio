@@ -10,10 +10,13 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 
+from .media_delivery import MEDIA_CACHE_CONTROL
+
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 ADMIN_PATH = re.compile(
     r"^/api/v1/(?:settings|diagnostics|system|backups|gc|cleanup|comfy-output-files|resources)(?:/|$)"
 )
+MEDIA_PATH = re.compile(r"^/api/v1/assets/[^/]+/(?:content|preview)$")
 
 
 class WorkspaceSecurityMiddleware:
@@ -33,6 +36,7 @@ class WorkspaceSecurityMiddleware:
             response = JSONResponse(
                 {"error": {"code": code, "message": message}}, status_code=status, headers=extra_headers
             )
+            response.headers["Cache-Control"] = "no-store"
             await response(scope, receive, send)
 
         settings = self.state.settings
@@ -136,7 +140,13 @@ class WorkspaceSecurityMiddleware:
                 response_headers["Content-Security-Policy"] = (
                     "frame-ancestors 'self'; object-src 'none'; base-uri 'self'"
                 )
-                if path.startswith("/api/"):
+                cacheable_media = (
+                    method in ("GET", "HEAD")
+                    and MEDIA_PATH.fullmatch(path)
+                    and message["status"] in (200, 206, 304)
+                    and response_headers.get("Cache-Control") == MEDIA_CACHE_CONTROL
+                )
+                if path.startswith("/api/") and not cacheable_media:
                     response_headers["Cache-Control"] = "no-store"
             await send(message)
 

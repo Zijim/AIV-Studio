@@ -97,7 +97,12 @@ async def resolve_task_media(session, tasks, executions, storage, registry):
                     and storage.resolve(blob.relative_path).is_file()
                 )
                 preview = bool(
-                    not changed and asset.preview_path and storage.resolve("previews/" + asset.preview_path).is_file()
+                    not changed
+                    and blob
+                    and blob.presence != "purged"
+                    and asset.presence != "purged"
+                    and asset.preview_path
+                    and storage.resolve("previews/" + asset.preview_path).is_file()
                 )
                 cached[key] = dict(
                     asset_id=asset.id,

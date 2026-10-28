@@ -279,7 +279,9 @@ class Storage:
             byte_size=blob.byte_size,
             mime_type=blob.mime_type,
             content_url=f"/api/v1/assets/{asset.id}/content",
-            preview_url=f"/api/v1/assets/{asset.id}/preview" if asset.preview_path else None,
+            preview_url=f"/api/v1/assets/{asset.id}/preview"
+            if asset.preview_path and blob.presence != "purged" and asset.presence != "purged"
+            else None,
         )
         if membership:
             result["project"] = row_dict(membership)

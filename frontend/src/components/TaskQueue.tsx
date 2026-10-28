@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { api, clock, labels, type Data } from "../lib";
 import { Button, Modal } from "./ui";
+import { ProgressiveImage } from "./ProgressiveImage";
 import {
   ExecutionIdentity,
   ExecutionParameters,
@@ -88,6 +89,7 @@ function AssetCard({
             src={asset.preview_url}
             alt={asset.name}
             loading="lazy"
+            decoding="async"
             onError={() => setBroken(true)}
           />
         ) : (
@@ -306,14 +308,15 @@ export function TaskAssetPreview({
             controls
             onError={() => setFailed(true)}
           />
-        ) : asset.preview_url ||
-          (asset.can_open && asset.media_type === "image") ? (
+        ) : asset.can_open && asset.media_type === "image" ? (
+          <ProgressiveImage
+            src={asset.content_url}
+            previewSrc={asset.preview_url}
+            alt={asset.name}
+          />
+        ) : asset.preview_url ? (
           <img
-            src={
-              asset.can_open && asset.media_type === "image"
-                ? asset.content_url
-                : asset.preview_url
-            }
+            src={asset.preview_url}
             alt={asset.name}
             onError={() => setFailed(true)}
           />

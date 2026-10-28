@@ -60,6 +60,7 @@ import {
 } from "./lib";
 import { Button, Empty, Modal } from "./components/ui";
 import { ConversationSwitcher } from "./components/ConversationSwitcher";
+import { ProgressiveImage } from "./components/ProgressiveImage";
 import { TaskQueue, TaskAssetPreview } from "./components/TaskQueue";
 import {
   CreativeSummary,
@@ -81,7 +82,12 @@ const imageRoles: Record<string, string> = {
 };
 function Thumb({ asset }: { asset: Data }) {
   return asset.preview_url && asset.presence !== "purged" ? (
-    <img src={asset.preview_url} alt={asset.name} loading="lazy" />
+    <img
+      src={asset.preview_url}
+      alt={asset.name}
+      loading="lazy"
+      decoding="async"
+    />
   ) : (
     <div className="file-placeholder">
       {asset.media_type === "video" ? <Video /> : <FileText />}
@@ -297,6 +303,25 @@ export default function App() {
     source.onmessage = (event) => {
       const update = JSON.parse(event.data);
       const type = update.type as string;
+      if (type === "asset.purged") {
+        const id = update.entity_id;
+        const purged = (asset: Data | null): Data | null =>
+          asset && (asset.id === id || asset.asset_id === id)
+            ? {
+                ...asset,
+                presence: "purged",
+                preview_url: null,
+                content_url: null,
+                can_open: false,
+                can_preview: false,
+              }
+            : asset;
+        setFocus(purged);
+        setLocatedAsset(purged);
+        setTaskPreview((current) =>
+          current ? { ...current, asset: purged(current.asset) } : current,
+        );
+      }
       if (type === "reset") {
         refresh();
         return;
@@ -1878,7 +1903,12 @@ function Media({ asset }: { asset: Data }) {
     );
   if (asset.media_type === "image")
     return (
-      <img className="canvas-image" src={asset.content_url} alt={asset.name} />
+      <ProgressiveImage
+        className="canvas-image"
+        src={asset.content_url}
+        previewSrc={asset.preview_url}
+        alt={asset.name}
+      />
     );
   if (asset.media_type === "video")
     return (

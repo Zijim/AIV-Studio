@@ -8,7 +8,21 @@ from contextlib import closing
 from sqlalchemy import select
 
 from .errors import AppError
-from .models import Asset, Blob, Execution, Maintenance, Plan, Project, ProjectAsset, Task, now, row_dict, uid
+from .media_delivery import remove_preview_files
+from .models import (
+    Asset,
+    Blob,
+    Execution,
+    Maintenance,
+    Plan,
+    Project,
+    ProjectAsset,
+    Task,
+    now,
+    record_event,
+    row_dict,
+    uid,
+)
 from .plans import ACTIVE_TASKS, digest
 from .storage import atomic_json, file_hash
 
@@ -93,7 +107,8 @@ class MaintenanceService:
                             asset = await s.get(Asset, affected["id"])
                             asset.presence = "purged"
                             if asset.preview_path:
-                                self.storage.resolve("previews/" + asset.preview_path).unlink(missing_ok=True)
+                                remove_preview_files(self.storage.resolve("previews/" + asset.preview_path))
+                            record_event(s, "asset.purged", entity_id=asset.id, asset_id=asset.id)
                     job.state = "completed"
                     return {"removed_files": len(candidates), "released_bytes": sum(c["bytes"] for c in candidates)}
 
@@ -109,6 +124,9 @@ class MaintenanceService:
                         blob.presence = "purged"
                         for asset in (await s.scalars(select(Asset).where(Asset.blob_id == blob.sha256))).all():
                             asset.presence = "purged"
+                            if asset.preview_path:
+                                remove_preview_files(self.storage.resolve("previews/" + asset.preview_path))
+                            record_event(s, "asset.purged", entity_id=asset.id, asset_id=asset.id)
                 job.state = "interrupted"
 
     async def backup(self):
