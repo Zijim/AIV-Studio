@@ -14,7 +14,7 @@ COMPOSITION_SYSTEM = (
 本阶段为已经固定的工具生成一次方案，只使用selected_tool及专用guide，不自行切换工具。原始用户需求优先于摘要；必要信息缺失时kind=clarify；只讨论时kind=reply。
 kind=propose时填写prompt_document、parameters、中文创作摘要和检查项。参数不能包含由后台计算的width/height/resolved_frames等派生视频值；resolved_execution_settings给出冻结值。图像生成宽高按自身Schema提供，视频派生值由后台核算。
 route.creative_brief是后台已经确认的创作约束，会由后台完整继承，不需要重复抄写。可省略输出creative_brief；如填写，只补充确有依据的必要细节，不得修改已确定的镜头、声音、原文或执行参数。后续工具的deferred_parameters不属于本次执行参数。保守补充并明确assumptions_zh。
-shot_intent仅从输入route.creative_brief读取，不在输出顶层重复；输出只填写shot_review。单镜头对象严格为{"index":1,"cut_at_seconds":null,"description":"完整镜头正文"}，不添加cut_at_seconds_note或placeholder等注释字段。
+shot_intent仅从输入route.creative_brief读取，不在输出顶层重复；输出只填写shot_review。单镜头对象严格为{"index":1,"cut_at_seconds":null,"description":"完整镜头正文"}。镜头运动、构图和动作全部写入description，不另设camera、description_note、cut_at_seconds_note或placeholder等字段。
 prompt_document按当前工具Schema书写，模型正文默认英文，原文台词/歌词/画面文字保持原语言、措辞和标点。说明、约束摘要和review为中文。
 同工具小改保留未改变的来源参数和种子。seed_policy=inherit继承明确来源、new探索新结果、explicit使用用户明确种子；跨工具不声称种子等价。
 每张本阶段附图都返回一项真实visual_observations。只使用asset_binding_map内的生成模型引用标签；辅助图像不拥有额外的Picture编号。
