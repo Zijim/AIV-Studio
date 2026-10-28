@@ -23,14 +23,14 @@ MAX_DECODE_PIXELS = 50_000_000
 # prose. Never fetch arbitrary URLs or infer attachments from past messages.
 LOCAL_ASSET_LINK = re.compile(
     r"(?<![A-Za-z0-9_./:?=&%#@-])"
-    r"(?P<origin>https?://(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?)?"
+    r"(?P<origin>https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?)?"
     r"/api/v1/assets/(?P<asset_id>[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})"
     r"/(?:preview|content)(?![A-Za-z0-9_./%~-])",
     re.IGNORECASE,
 )
 
 
-def linked_asset_ids(content, port):
+def linked_asset_ids(content, port, public_origin=""):
     ids = []
     for match in LOCAL_ASSET_LINK.finditer(content):
         origin = match["origin"]
@@ -41,7 +41,9 @@ def linked_asset_ids(content, port):
             except ValueError:
                 continue
             # The Vite development page proxies the same /api routes.
-            if actual_port not in (port, 5173):
+            local = url.hostname in ("127.0.0.1", "localhost") and actual_port in (port, 5173)
+            published = bool(public_origin and origin.lower() == public_origin)
+            if not (local or published):
                 continue
         asset_id = str(UUID(match["asset_id"]))
         if asset_id not in ids:

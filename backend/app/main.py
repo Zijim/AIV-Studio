@@ -8,7 +8,7 @@ from logging.handlers import RotatingFileHandler
 
 from alembic import command
 from alembic.config import Config
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 
@@ -24,6 +24,7 @@ from .models import Setting
 from .planner import Planner
 from .plans import PlanService
 from .registry import Registry
+from .security import WorkspaceSecurityMiddleware
 from .storage import Storage
 from .worker import Worker
 
@@ -85,6 +86,7 @@ async def lifespan(app):
     state = app.state
     state.settings, state.db = settings, db
     state.session_token, state.csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+    state.public_session_token, state.public_csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
     state.registry = Registry(ROOT / "tool_registry", settings.data_dir)
     state.storage = Storage(db, settings)
     state.comfy = ComfyClient(settings.comfy_url, settings.comfy_output_root)
@@ -116,30 +118,7 @@ app.include_router(conversation_router)
 app.include_router(extension_router)
 
 
-@app.middleware("http")
-async def local_security(request: Request, call_next):
-    request.state.request_id = secrets.token_hex(8)
-    host = request.headers.get("host", "").split(":")[0].lower()
-    if host not in ("127.0.0.1", "localhost"):
-        return JSONResponse({"error": {"code": "host_rejected", "message": "只接受本机请求。"}}, status_code=403)
-    allowed = {f"http://{h}:{p}" for h in ("127.0.0.1", "localhost") for p in (app.state.settings.port, 5173)}
-    origin = request.headers.get("origin")
-    if origin and origin not in allowed:
-        return JSONResponse({"error": {"code": "origin_rejected", "message": "请求来源不受信任。"}}, status_code=403)
-    if request.method not in ("GET", "HEAD", "OPTIONS"):
-        if (
-            not origin
-            or request.cookies.get("aiv_session") != app.state.session_token
-            or request.headers.get("x-aiv-csrf") != app.state.csrf
-        ):
-            return JSONResponse(
-                {"error": {"code": "csrf_rejected", "message": "页面会话已过期，请刷新重试。"}}, status_code=403
-            )
-    response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Referrer-Policy"] = "same-origin"
-    response.headers["X-Request-ID"] = request.state.request_id
-    return response
+app.add_middleware(WorkspaceSecurityMiddleware, state=app.state)
 
 
 @app.exception_handler(AppError)

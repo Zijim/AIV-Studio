@@ -55,6 +55,7 @@ import {
   type Data,
   labels,
   messageSchema,
+  useAccess,
   useWorkspace,
 } from "./lib";
 import { Button, Empty, Modal } from "./components/ui";
@@ -94,6 +95,7 @@ export default function App() {
   const navigate = useNavigate(),
     location = useLocation();
   const store = useWorkspace();
+  const access = useAccess();
   const [modal, setModal] = useState<string | null>(null);
   const [focus, setFocus] = useState<Data | null>(null);
   const [tool, setTool] = useState<Data | null>(null);
@@ -497,17 +499,38 @@ export default function App() {
   async function importFiles(list: FileList | File[]) {
     if (!writable || !list.length) return;
     const accepted = Array.from(list);
+    const maxBatchBytes = access.maxUploadBytes
+      ? access.maxUploadBytes - 65536
+      : Infinity;
+    if (accepted.some((file) => file.size > maxBatchBytes)) {
+      setToast("公开工作台暂不支持单个90MB及以上的文件，请压缩后上传。");
+      return;
+    }
+    const batches: File[][] = [];
+    let batchBytes = 0;
+    for (const file of accepted) {
+      const last = batches[batches.length - 1];
+      if (
+        !last ||
+        last.length >= 50 ||
+        batchBytes + file.size > maxBatchBytes
+      ) {
+        batches.push([file]);
+        batchBytes = file.size;
+      } else {
+        last.push(file);
+        batchBytes += file.size;
+      }
+    }
     const results: Data[] = [];
     await action(
       "import",
       async () => {
-        for (let i = 0; i < accepted.length; i += 50) {
+        for (const files of batches) {
           const data = new FormData();
-          accepted
-            .slice(i, i + 50)
-            .forEach((f) =>
-              data.append("files", f, f.webkitRelativePath || f.name),
-            );
+          files.forEach((f) =>
+            data.append("files", f, f.webkitRelativePath || f.name),
+          );
           const batch = await api(
             `/projects/${project!.id}/imports`,
             "POST",
@@ -644,7 +667,13 @@ export default function App() {
             ? "ComfyUI 已连接"
             : "ComfyUI 未就绪"}
           <span className="top-separator" />
-          <span>本地创作工作台</span>
+          <span
+            title={
+              access.publicAccess ? "项目、素材与对话由所有访客共享" : undefined
+            }
+          >
+            {access.publicAccess ? "公开共享工作台" : "本地创作工作台"}
+          </span>
         </div>
         <div className="top-actions">
           <Button
@@ -653,40 +682,87 @@ export default function App() {
           >
             <Trash2 size={16} />
           </Button>
-          <Button onClick={() => setModal("settings")}>
-            <Settings2 size={16} />
-            <span>设置</span>
-          </Button>
-          <div className="avatar">我</div>
+          {access.canManage && (
+            <Button onClick={() => setModal("settings")}>
+              <Settings2 size={16} />
+              <span>设置</span>
+            </Button>
+          )}
+          <div
+            className="avatar"
+            title={
+              access.publicAccess ? "访客 · 共用项目、素材和对话" : "本机管理员"
+            }
+          >
+            {access.publicAccess ? "客" : "我"}
+          </div>
         </div>
       </header>
       <div className="workspace">
         <aside className="library-panel">
+          {access.publicAccess && (
+            <p className="shared-notice" role="note">
+              公开体验：项目、素材和对话对所有访客可见，请勿上传私人资料。
+            </p>
+          )}
           <div className="project-switch">
-            <span className="eyebrow">当前项目</span>
+            <div className="project-section-heading">
+              <span className="project-section-title">创作项目</span>
+              <span id="project-selection-hint">先选项目，再创作</span>
+            </div>
             <div className="project-row">
-              <Folder size={19} />
-              <select
-                aria-label="切换项目"
-                value={store.projectId}
-                onChange={(e) => {
-                  store.chooseProject(e.target.value);
-                  setFocus(null);
-                  navigate("/projects/" + e.target.value);
-                }}
+              <div
+                className="project-select"
+                title={
+                  project
+                    ? `当前项目：${project.name}，点击切换`
+                    : "选择或新建一个项目后开始创作"
+                }
               >
-                {!projects.data?.length && (
-                  <option value="">创建第一个项目</option>
-                )}
-                {projects.data?.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                    {p.archived_at ? " · 已归档" : ""}
-                  </option>
-                ))}
-              </select>
+                <span className="project-select-icon" aria-hidden="true">
+                  <Folder size={17} />
+                </span>
+                <span className="project-select-name" aria-hidden="true">
+                  {project
+                    ? `${project.name}${project.archived_at ? " · 已归档" : ""}`
+                    : "选择创作项目"}
+                </span>
+                <span className="project-select-action" aria-hidden="true">
+                  切换
+                  <ChevronDown size={13} />
+                </span>
+                <select
+                  aria-label="切换项目"
+                  aria-describedby="project-selection-hint"
+                  value={project?.id ?? ""}
+                  disabled={projects.isPending || !projects.data?.length}
+                  onChange={(e) => {
+                    store.chooseProject(e.target.value);
+                    setFocus(null);
+                    navigate("/projects/" + e.target.value);
+                  }}
+                >
+                  {!project && (
+                    <option value="" disabled>
+                      {projects.isPending
+                        ? "正在加载项目…"
+                        : projects.data?.length
+                          ? "选择创作项目"
+                          : "请先新建项目"}
+                    </option>
+                  )}
+                  {projects.data?.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                      {p.archived_at ? " · 已归档" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <Button
+                className="project-create"
                 aria-label="新建项目"
+                title="新建项目"
                 onClick={() => setModal("new-project")}
               >
                 <Plus size={17} />
@@ -695,11 +771,21 @@ export default function App() {
             {project && (
               <button
                 className="project-description"
+                title={project.goal || "设置项目目标与风格"}
                 onClick={() => setModal("edit-project")}
               >
-                {project.goal || "添加项目目标与风格，让助手理解你的创作"}
+                <span>{project.goal || "设置项目目标与风格"}</span>
                 <MoreHorizontal size={15} />
               </button>
+            )}
+            {!project && (
+              <span className="project-empty-hint">
+                {projects.isPending
+                  ? "正在加载项目…"
+                  : projects.data?.length
+                    ? "选择项目，素材与对话会在此归档"
+                    : "点击 + 新建你的第一个项目"}
+              </span>
             )}
           </div>
           <div className="library-heading">
@@ -868,13 +954,15 @@ export default function App() {
             >
               <Copy size={16} />
             </Button>
-            <Button
-              title="导入ComfyUI既有产物"
-              disabled={!writable}
-              onClick={() => setModal("comfy-output")}
-            >
-              <ImagePlus size={16} />
-            </Button>
+            {access.canManage && (
+              <Button
+                title="导入ComfyUI既有产物"
+                disabled={!writable}
+                onClick={() => setModal("comfy-output")}
+              >
+                <ImagePlus size={16} />
+              </Button>
+            )}
           </div>
           <input
             ref={files}
@@ -1670,7 +1758,7 @@ export default function App() {
           </div>
         </Modal>
       )}
-      {modal === "settings" && (
+      {modal === "settings" && access.canManage && (
         <SettingsDialog
           action={action}
           onClose={() => setModal(null)}
@@ -1684,7 +1772,7 @@ export default function App() {
           action={action}
         />
       )}
-      {modal === "comfy-output" && (
+      {modal === "comfy-output" && access.canManage && (
         <ComfyOutputDialog
           projectId={project!.id}
           action={action}

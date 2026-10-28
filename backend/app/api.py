@@ -58,14 +58,37 @@ async def session(request: Request):
 
     async with svc(request).db.session() as s:
         cursor = await s.scalar(select(func.max(Event.id))) or 0
-    response = JSONResponse({"csrf_token": svc(request).csrf, "version": "0.1.0", "event_cursor": cursor})
-    response.set_cookie("aiv_session", svc(request).session_token, httponly=True, samesite="strict")
+    public = request.state.public_access
+    response = JSONResponse(
+        {
+            "csrf_token": svc(request).public_csrf if public else svc(request).csrf,
+            "version": "0.1.0",
+            "event_cursor": cursor,
+            "public_access": public,
+            "can_manage": not public,
+            "max_upload_bytes": svc(request).settings.public_max_request_bytes if public else None,
+        }
+    )
+    response.set_cookie(
+        "aiv_session",
+        svc(request).public_session_token if public else svc(request).session_token,
+        httponly=True,
+        samesite="strict",
+        secure=public,
+    )
     return response
 
 
 @router.get("/health")
 async def health(request: Request):
     state = svc(request)
+    if request.state.public_access:
+        return {
+            "status": "ok",
+            "version": "0.1.0",
+            "comfyui": {key: state.worker.status.get(key) for key in ("connected", "compatible", "version")},
+            "planner": {"configured": bool(await state.planner.key()), "model": state.settings.llm_model},
+        }
     return {
         "status": "ok",
         "version": "0.1.0",

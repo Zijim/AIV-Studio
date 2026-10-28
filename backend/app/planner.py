@@ -439,7 +439,7 @@ class Planner:
             key = await self.key()
             if not key:
                 raise AppError("llm_not_configured", "请先在设置中保存DeepSeek官方API key。手动工具可以直接使用。", 409)
-            linked_ids = linked_asset_ids(request.content, self.settings.port)
+            linked_ids = linked_asset_ids(request.content, self.settings.port, self.settings.public_origin)
             selected_ids = list(dict.fromkeys([*request.selected_asset_ids, *linked_ids]))
             if len(selected_ids) > 30:
                 raise AppError("input_reference_limit", "所选素材和消息链接合计每轮最多引用30份素材，请减少引用。")

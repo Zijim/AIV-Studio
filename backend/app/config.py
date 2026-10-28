@@ -1,8 +1,9 @@
 import os
 import tomllib
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -12,6 +13,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AIV_", extra="ignore")
     host: str = "127.0.0.1"
     port: int = 8765
+    public_origin: str = ""
+    public_writes_per_minute: int = Field(default=30, ge=1, le=300)
+    public_max_request_bytes: int = Field(default=90 * 1024**2, ge=1024, le=90 * 1024**2)
     data_dir: Path = Field(
         default_factory=lambda: Path(os.environ.get("LOCALAPPDATA", str(ROOT))) / "AIVAgent" / "data"
     )
@@ -40,6 +44,26 @@ class Settings(BaseSettings):
     video_max_pixels: int = 630000
     video_max_frames: int = 243
 
+    @field_validator("public_origin")
+    @classmethod
+    def validate_public_origin(cls, value):
+        if not value:
+            return ""
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.path not in ("", "/")
+            or parsed.query
+            or parsed.fragment
+            or parsed.port not in (None, 443)
+            or parsed.hostname in ("localhost", "127.0.0.1")
+        ):
+            raise ValueError("public_origin 必须是无路径的公网HTTPS域名。")
+        return f"https://{parsed.hostname.lower()}"
+
 
 def load_settings() -> Settings:
     config = ROOT / "config.toml"
@@ -48,6 +72,11 @@ def load_settings() -> Settings:
         raw = tomllib.loads(config.read_text(encoding="utf-8-sig"))
         mapping = {
             "app": {"host": "host", "port": "port", "data_dir": "data_dir"},
+            "sharing": {
+                "public_origin": "public_origin",
+                "writes_per_minute": "public_writes_per_minute",
+                "max_request_bytes": "public_max_request_bytes",
+            },
             "comfyui": {
                 "base_url": "comfy_url",
                 "output_read_root": "comfy_output_root",

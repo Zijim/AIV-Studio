@@ -30,7 +30,7 @@ powershell -ExecutionPolicy Bypass -File scripts/stop.ps1
 
 ## 使用
 
-1. 新建项目，填写创作目标和风格。
+1. 先在左上角“创作项目”选择本次使用的项目；点击旁边的“+”可新建项目，下方可设置创作目标和风格。
 2. 导入文件、整个文件夹，或通过素材栏“导入ComfyUI既有产物”入口选择本机output目录内文件；Ctrl / Shift 点击可选择多份素材。每批文件显示独立导入结果。
 3. 在设置中保存 **DeepSeek 官方 API Key**，默认模型 ID 是 `deepseek-flash`，对应 DeepSeek V4.1 Flash。也可在启动服务前设置 `DEEPSEEK_API_KEY`。环境变量优先于 Windows 凭据管理器。
 4. 选择图片并直接描述目标，助手默认自动判断素材用途；需要明确限定时可设置主体、风格、环境、构图参考或首尾帧。也可以直接粘贴当前项目图片的本工作台预览/原图链接，后台会自动附图。每轮最多6张，本轮选中或链接引用的图片会生成读图副本并发送至 DeepSeek；其他素材只提供文字信息。回复下方可展开“模型图片观察”，查看各图观察和不确定之处。
@@ -94,7 +94,15 @@ npm.cmd run dev
 
 Vite 端口5173代理 `/api` 到后端。生产界面使用 `npm.cmd run build` 构建后由后端同源提供。后端只运行一个 worker，应用目录有进程锁。配置与数据库迁移在启动时完成，迁移前备份已有数据库。
 
-本地 API 文档：`http://127.0.0.1:8765/docs`。写接口需要先 GET `/api/v1/session`，保留会话 cookie，设置同源 `Origin` 和响应中的 `X-AIV-CSRF`。这里只支持回环地址。
+本地 API 文档：`http://127.0.0.1:8765/docs`。写接口需要先 GET `/api/v1/session`，保留会话 cookie，设置同源 `Origin` 和响应中的 `X-AIV-CSRF`。服务仍绑定回环地址，可通过下面的分享模式连接公网隧道。
+
+## 公开共享体验
+
+在 `config.toml` 的 `[sharing]` 设置 `public_origin = "https://studio.zijim.xyz"` 后，可通过本机 Cloudflare Tunnel 发布无需登录的共享工作台。所有访客共用当前数据目录的项目、素材、对话、任务队列及模型总预算。管理入口仍使用 `http://127.0.0.1:8765`；公网禁止访问设置、密钥、备份、永久清理、关停、诊断及本机 ComfyUI 输出浏览接口，含兼容别名。公网与本机会话/CSRF分离，公网 Cookie 仅通过 HTTPS 发送；公网精确校验 Host 和 Origin。
+
+共享上传按90MiB请求总大小分批，前后端均限制，流式请求也受限制；每个公网来源默认每分钟最多30次写请求。现有每日/每轮模型预算和最大排队数继续生效。本站并非个人私密空间，请仅分享准备公开的资料。
+
+隧道 `studio` 路由应显式设置 `originRequest.httpHostHeader: studio.zijim.xyz`，将公网请求固定送入分享权限。配置及 DNS 就绪后运行 `powershell -ExecutionPolicy Bypass -File scripts/start_public.ps1` 在后台启动应用和现有 `mediagent` 隧道；重复运行会复用已有进程。电脑需保持联网，ComfyUI仍需运行。取消分享时，删除本地隧道中的 `studio` 路由并重启隧道，或清空 `public_origin` 并重启应用。
 
 上下文使用随应用固定版本发布的 DeepSeek V4.1 Flash 官方分词器计数，并为供应商封装差异预留5%和512 tokens。每个对话独立使用默认128K输入、8K输出预算；达到96K时将较早对话整理成持久摘要，按token预算保留约24K的近期完整消息，不再按12条/2000字符截断。原始消息、摘要边界和每轮上下文快照保存在本机；每个对话独立整理，后续只处理摘要边界之后的新消息。界面可以加载更早消息，不受首屏条数限制。每日费用预算仍由整个工作台共用。
 

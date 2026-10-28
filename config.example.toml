@@ -3,6 +3,12 @@ host = "127.0.0.1"
 port = 8765
 # data_dir = "D:/AIVAgent/data" # 默认 %LOCALAPPDATA%/AIVAgent/data
 
+[sharing]
+# 留空时仅供本机使用；填写后允许无需登录的公开共享访问。
+public_origin = ""
+writes_per_minute = 30
+max_request_bytes = 94371840 # 每次上传总大小90MiB，适配公网代理限制
+
 [comfyui]
 base_url = "http://127.0.0.1:8188"
 output_read_root = "F:/ComfyUI/ComfyUI_windows_portable/ComfyUI/output"

@@ -5,12 +5,22 @@ import { z } from "zod";
 export type Data = Record<string, any>;
 let csrf = "";
 export let eventCursor = 0;
+export const useAccess = create<{
+  publicAccess: boolean;
+  canManage: boolean;
+  maxUploadBytes: number | null;
+}>(() => ({ publicAccess: false, canManage: false, maxUploadBytes: null }));
 export async function bootstrap() {
   const response = await fetch("/api/v1/session");
-  if (!response.ok) throw new Error("无法连接本地服务");
+  if (!response.ok) throw new Error("无法连接工作台服务");
   const session = await response.json();
   csrf = session.csrf_token;
   eventCursor = session.event_cursor;
+  useAccess.setState({
+    publicAccess: !!session.public_access,
+    canManage: !!session.can_manage,
+    maxUploadBytes: session.max_upload_bytes ?? null,
+  });
 }
 export async function api<T = Data>(
   path: string,
