@@ -607,61 +607,11 @@ small {
   border-radius: 4px;
   box-shadow: 0 14px 40px #0004;
 }
-.canvas-welcome {
+.canvas-drop-hint {
   text-align: center;
-  margin-top: -35px;
-  max-width: 450px;
-}
-.welcome-symbol {
-  width: 90px;
-  height: 90px;
-  margin: 0 auto 29px;
-  border: 1px solid #51413466;
-  box-shadow: 0 0 60px #c48c4f13;
-  border-radius: 24px;
-  background: linear-gradient(145deg, #302820, #191a1d);
-  color: #d7a07a;
-  display: grid;
-  place-items: center;
-  transform: rotate(-7deg);
-}
-.welcome-symbol svg {
-  transform: rotate(7deg);
-}
-.canvas-welcome .eyebrow {
-  color: #a78368;
-  font-size: 11px;
-  letter-spacing: 2px;
-}
-.canvas-welcome h1 {
-  font-size: 29px;
-  font-weight: 500;
-  letter-spacing: 1px;
-  margin: 12px 0 18px;
-  color: #e2dfdc;
-}
-.canvas-welcome p {
   color: #797c84;
-  font-size: 12px;
-  line-height: 2;
-}
-.welcome-actions {
-  display: flex;
-  gap: 12px;
-  justify-content: center;
-  margin-top: 28px;
-}
-.welcome-actions .btn {
-  padding: 10px 15px;
-}
-.welcome-actions .btn-ghost {
-  border: 1px solid #35353a;
-  background: #202125;
-}
-.canvas-hint {
-  color: #585c64;
-  font-size: 10px;
-  margin-top: 23px;
+  font-size: 14px;
+  letter-spacing: 1px;
 }
 .canvas-info {
   height: 43px;
@@ -2049,9 +1999,6 @@ details small {
   .conversation {
     padding: 25px;
   }
-  .canvas-welcome h1 {
-    font-size: 34px;
-  }
   .asset-library {
     gap: 15px;
   }
@@ -2151,9 +2098,6 @@ details small {
   }
   .task-row {
     gap: 9px;
-  }
-  .canvas-welcome h1 {
-    font-size: 23px;
   }
 }
 .pagination {

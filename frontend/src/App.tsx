@@ -1080,41 +1080,7 @@ export default function App() {
             ) : focus ? (
               <Media asset={focus} />
             ) : (
-              <div className="canvas-welcome">
-                <div className="welcome-symbol">
-                  <WandSparkles size={38} />
-                </div>
-                <span className="eyebrow">每一个想法，都值得被看见</span>
-                <h1>今天想创作什么？</h1>
-                <p>
-                  描述你的想法，或导入一张图片。
-                  <br />
-                  直接描述你想要的作品，助手会选择合适的生成方式。
-                </p>
-                <div className="welcome-actions">
-                  <Button
-                    variant="primary"
-                    disabled={!writable}
-                    onClick={() => {
-                      const value = tools.data?.find(
-                        (t) => t.id === "image.generate.zimage",
-                      );
-                      if (value) openTool(value);
-                    }}
-                  >
-                    <Sparkles size={16} />
-                    开始创作
-                  </Button>
-                  <Button
-                    disabled={!writable}
-                    onClick={() => files.current?.click()}
-                  >
-                    <ImagePlus size={16} />
-                    导入图片
-                  </Button>
-                </div>
-                <div className="canvas-hint">也可以将文件拖到这里</div>
-              </div>
+              <div className="canvas-drop-hint">将文件拖入</div>
             )}
           </div>
           {focus && (
