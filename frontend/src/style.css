@@ -608,10 +608,36 @@ small {
   box-shadow: 0 14px 40px #0004;
 }
 .canvas-drop-hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 260px;
   text-align: center;
-  color: #797c84;
-  font-size: 14px;
+}
+.canvas-drop-icon {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 18px;
+  border: 1px solid #51413466;
+  border-radius: 18px;
+  background: linear-gradient(145deg, #302820, #191a1d);
+  color: #d7a07a;
+}
+.canvas-drop-title {
+  margin: 0;
+  color: #d6d3cf;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.5;
   letter-spacing: 1px;
+}
+.canvas-drop-description {
+  margin: 7px 0 0;
+  color: #797c84;
+  font-size: 12px;
+  line-height: 1.6;
 }
 .canvas-info {
   height: 43px;

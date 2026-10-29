@@ -1080,7 +1080,13 @@ export default function App() {
             ) : focus ? (
               <Media asset={focus} />
             ) : (
-              <div className="canvas-drop-hint">将文件拖入</div>
+              <div className="canvas-drop-hint">
+                <div className="canvas-drop-icon" aria-hidden="true">
+                  <WandSparkles size={28} strokeWidth={1.6} />
+                </div>
+                <p className="canvas-drop-title">将文件拖入</p>
+                <p className="canvas-drop-description">也可以直接描述想法</p>
+              </div>
             )}
           </div>
           {focus && (
