@@ -1,0 +1,8 @@
+{
+  "source": "F:\\ComfyUI\\ComfyUI_windows_portable\\ComfyUI\\user\\default\\workflows\\图片编辑qwen.json",
+  "changes": [
+    "Two input images required; enable the existing Lightning LoRA 4-step CFG 1 branch; retain source-driven output sizing."
+  ],
+  "source_hash": "076940fe1f1824c35ce646e27ba63acf8b7f5ebed0ac2950f5a11926b41818cf",
+  "template_hash": "e864154b8cb8a99fe5dc95b694b5c8d4f262afe575c8eb315e75bd3376fcb9bc"
+}

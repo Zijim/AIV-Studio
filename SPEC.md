@@ -294,7 +294,7 @@ manifest 的 bindings 由实现者编写，映射产品参数到固定模板的 
 | image.generate.zimage | 基础文生图.json | prompt、negative_prompt、width、height、seed、candidate_count | 默认文生图；1024×1024，9 步，CFG 0.8，euler/simple |
 | image.generate.qwen | 文生图qwen.json | prompt、negative_prompt、width、height、preset、seed、candidate_count | fast：1024×1024、Lightning 4 步/CFG 1；quality：1328×1328、50 步/CFG 4 |
 | image.edit.qwen.fast | 图片编辑.json | 一张 source_image、instruction、negative_prompt、输出尺寸、seed | Lightning 4 步/CFG 1；按源图比例计算输出，最长边默认不超过 1280 |
-| image.edit.qwen.reference | 图片编辑qwen.json | source_image + reference_image，两张必需；instruction、negative_prompt、seed | 现有质量分支 40 步/CFG 4；输入主图最长边 1280；第三参考图不开放 |
+| image.edit.qwen.reference | 图片编辑qwen.json | source_image + reference_image，两张必需；instruction、negative_prompt、seed | 1.1.0 默认 Lightning LoRA 4 步/CFG 1；历史 1.0.0 保留 40 步/CFG 4；输出随主图缩放至最长边 1280（小图也会放大）；第三参考图不开放 |
 | image.upscale.seedvr2 | 图像高清放大.json | source_image、scale 或 target_short_edge、seed | 3B FP8，默认两倍；保留现有 offload/block swap/分块设置 |
 | video.generate.minimax_i2v | video_minimax_h3_i2v.json | source_image、prompt、宽高/比例、duration_seconds、seed | 默认目标 0.4 MP、跟随输入比例、请求 5 秒、20 步、24fps |
 
@@ -321,7 +321,7 @@ manifest 的 bindings 由实现者编写，映射产品参数到固定模板的 
 
 - Qwen 文生图的两个提示词由嵌套 widget 值规范化为真实字符串。快档映射 11.value=true，质量档 false；实际步数/CFG来自开关连线，不能只改 18 的 widget。
 - 单图编辑保留当前快速分支；固定 latent 尺寸转为已声明的 width/height 绑定。主图尺寸由后台计算，不误用未参与执行的 18/19 节点。
-- 参考图编辑保留现有质量分支，强制要求第二输入；不得只凭“可选”标题遗漏其文件输入。
+- 参考图编辑默认启用现有双图 Lightning 4 步分支，强制要求第二输入；历史质量分支保留在旧工具版本。
 - MiniMax 在接入副本中把最终 width/height 准备成开放常量输入，取代只适合 UI 的 ResolutionSelector 连线；核心采样/模型/首帧/音频链保留。该准备变化记录并版本化，日常只填常量值。
 - 输出前缀统一由后台写为 `AIVAgent/<execution_id>/result`，不得覆盖原产物。
 

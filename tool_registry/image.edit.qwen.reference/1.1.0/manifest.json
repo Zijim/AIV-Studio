@@ -1,0 +1,120 @@
+{
+  "id": "image.edit.qwen.reference",
+  "version": "1.1.0",
+  "name": "参考图编辑",
+  "subtitle": "Qwen Edit · Lightning 4步",
+  "category": "edit",
+  "source": "图片编辑qwen.json",
+  "inputs": [
+    {
+      "slot": "source_image",
+      "label": "原图",
+      "media_type": "image",
+      "required": true
+    },
+    {
+      "slot": "reference_image",
+      "label": "参考图",
+      "media_type": "image",
+      "required": true
+    }
+  ],
+  "fields": [
+    {
+      "name": "instruction",
+      "label": "编辑指令",
+      "type": "textarea",
+      "default": "",
+      "required": true
+    },
+    {
+      "name": "negative_prompt",
+      "label": "避免出现",
+      "type": "textarea",
+      "default": ""
+    },
+    {
+      "name": "seed",
+      "label": "随机种子",
+      "type": "seed",
+      "default": null
+    }
+  ],
+  "defaults": {},
+  "bindings": {
+    "instruction": [
+      "3",
+      "prompt"
+    ],
+    "negative_prompt": [
+      "4",
+      "prompt"
+    ],
+    "seed": [
+      "1",
+      "seed"
+    ]
+  },
+  "input_bindings": {
+    "source_image": [
+      "7",
+      "image"
+    ],
+    "reference_image": [
+      "8",
+      "image"
+    ]
+  },
+  "prefixes": [
+    "16"
+  ],
+  "roles": {
+    "16": "final",
+    "15": "preview"
+  },
+  "changes": [
+    "Two input images required; enable the existing Lightning LoRA 4-step CFG 1 branch; retain source-driven output sizing."
+  ],
+  "local_only": true,
+  "source_hash": "076940fe1f1824c35ce646e27ba63acf8b7f5ebed0ac2950f5a11926b41818cf",
+  "template_hash": "e864154b8cb8a99fe5dc95b694b5c8d4f262afe575c8eb315e75bd3376fcb9bc",
+  "required_node_types": [
+    "CFGNorm",
+    "CLIPLoader",
+    "DiffusionModelLoaderKJ",
+    "EmptySD3LatentImage",
+    "GetImageSize",
+    "ImageScaleToMaxDimension",
+    "KSampler",
+    "LoadImage",
+    "LoraLoaderModelOnly",
+    "ModelSamplingAuraFlow",
+    "PreviewImage",
+    "SaveImage",
+    "TextEncodeQwenImageEditPlus",
+    "VAEDecode",
+    "VAELoader"
+  ],
+  "required_models": [
+    {
+      "node_type": "DiffusionModelLoaderKJ",
+      "field": "model_name",
+      "value": "qwen_image_edit_2511_fp8mixed.safetensors"
+    },
+    {
+      "node_type": "CLIPLoader",
+      "field": "clip_name",
+      "value": "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+    },
+    {
+      "node_type": "VAELoader",
+      "field": "vae_name",
+      "value": "qwen_image_vae.safetensors"
+    },
+    {
+      "node_type": "LoraLoaderModelOnly",
+      "field": "lora_name",
+      "value": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"
+    }
+  ]
+}

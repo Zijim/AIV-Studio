@@ -1,0 +1,259 @@
+{
+  "2": {
+    "inputs": {
+      "model_name": "qwen_image_edit_2511_fp8mixed.safetensors",
+      "weight_dtype": "default",
+      "compute_dtype": "default",
+      "patch_cublaslinear": false,
+      "sage_attention": "disabled",
+      "enable_fp16_accumulation": false
+    },
+    "class_type": "DiffusionModelLoaderKJ",
+    "_meta": {
+      "title": "主模型 Qwen-Image-Edit-2511 fp8"
+    }
+  },
+  "5": {
+    "inputs": {
+      "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "文本编码器"
+    }
+  },
+  "6": {
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "VAE"
+    }
+  },
+  "7": {
+    "inputs": {
+      "image": "preview.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "image1 原图（必填）"
+    }
+  },
+  "8": {
+    "inputs": {
+      "image": "1836007d-862c-4ea4-a118-0d40d27b4e43.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "image2 参考图（必填）"
+    }
+  },
+  "18": {
+    "inputs": {
+      "upscale_method": "area",
+      "largest_size": 1280,
+      "image": [
+        "7",
+        0
+      ]
+    },
+    "class_type": "ImageScaleToMaxDimension",
+    "_meta": {
+      "title": "Scale Image to Max Dimension"
+    }
+  },
+  "19": {
+    "inputs": {
+      "image": [
+        "18",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Image Size"
+    }
+  },
+  "3": {
+    "inputs": {
+      "prompt": "把图1骑士的盔甲替换为图2的盔甲",
+      "clip": [
+        "5",
+        0
+      ],
+      "vae": [
+        "6",
+        0
+      ],
+      "image1": [
+        "7",
+        0
+      ],
+      "image2": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "_meta": {
+      "title": "正向提示词 = 编辑指令"
+    }
+  },
+  "4": {
+    "inputs": {
+      "prompt": "低质量, 模糊, 变形, 多余手指, 水印, 错字",
+      "clip": [
+        "5",
+        0
+      ],
+      "vae": [
+        "6",
+        0
+      ],
+      "image1": [
+        "7",
+        0
+      ],
+      "image2": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "_meta": {
+      "title": "负向提示词"
+    }
+  },
+  "13": {
+    "inputs": {
+      "batch_size": 1,
+      "width": [
+        "19",
+        0
+      ],
+      "height": [
+        "19",
+        1
+      ]
+    },
+    "class_type": "EmptySD3LatentImage",
+    "_meta": {
+      "title": "输出尺寸（跟随 image1 缩放后的尺寸）"
+    }
+  },
+  "10": {
+    "inputs": {
+      "lora_name": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+      "strength_model": 1,
+      "model": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Lightning LoRA（极速档）"
+    }
+  },
+  "17": {
+    "inputs": {
+      "shift": 3,
+      "model": [
+        "10",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingAuraFlow",
+    "_meta": {
+      "title": "ModelSamplingAuraFlow 极速档"
+    }
+  },
+  "12": {
+    "inputs": {
+      "strength": 1,
+      "pre_cfg": false,
+      "model": [
+        "17",
+        0
+      ]
+    },
+    "class_type": "CFGNorm",
+    "_meta": {
+      "title": "CFGNorm 极速档"
+    }
+  },
+  "1": {
+    "inputs": {
+      "seed": 348197485973701,
+      "steps": 4,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "12",
+        0
+      ],
+      "positive": [
+        "3",
+        0
+      ],
+      "negative": [
+        "4",
+        0
+      ],
+      "latent_image": [
+        "13",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler 极速档 4步 CFG1.0"
+    }
+  },
+  "14": {
+    "inputs": {
+      "samples": [
+        "1",
+        0
+      ],
+      "vae": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAEDecode 极速档"
+    }
+  },
+  "15": {
+    "inputs": {
+      "images": [
+        "14",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "PreviewImage 极速档"
+    }
+  },
+  "16": {
+    "inputs": {
+      "filename_prefix": "qwen_edit_fast",
+      "images": [
+        "14",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "SaveImage 极速档"
+    }
+  }
+}
