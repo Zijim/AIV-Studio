@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   useInfiniteQuery,
   useQuery,
@@ -72,6 +79,65 @@ import {
 
 const activeStates = ["queued", "running", "saving"];
 const executeKeys = new Map<string, string>();
+const panelLimits = {
+  leftMin: 210,
+  leftMax: 460,
+  rightMin: 280,
+  rightMax: 560,
+  centerMin: 320,
+  handle: 8,
+};
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function defaultPanelLayout() {
+  return window.innerWidth >= 1600
+    ? { left: 300, right: 400 }
+    : { left: 270, right: 356 };
+}
+
+function fitPanelLayout(
+  left: number,
+  right: number,
+  width = window.innerWidth,
+) {
+  const maxTotal = width - panelLimits.centerMin - panelLimits.handle * 2;
+  let nextLeft = clamp(left, panelLimits.leftMin, panelLimits.leftMax);
+  let nextRight = clamp(right, panelLimits.rightMin, panelLimits.rightMax);
+  if (nextLeft + nextRight > maxTotal) {
+    const reduceRight = Math.min(
+      nextLeft + nextRight - maxTotal,
+      Math.max(0, nextRight - panelLimits.rightMin),
+    );
+    nextRight -= reduceRight;
+    const remaining = Math.max(0, nextLeft + nextRight - maxTotal);
+    nextLeft -= Math.min(
+      remaining,
+      Math.max(0, nextLeft - panelLimits.leftMin),
+    );
+  }
+  return { left: nextLeft, right: nextRight };
+}
+
+function readPanelLayout() {
+  try {
+    const stored = JSON.parse(
+      window.localStorage.getItem("aiv-panel-layout") || "null",
+    );
+    if (
+      stored &&
+      Number.isFinite(stored.left) &&
+      Number.isFinite(stored.right)
+    ) {
+      return fitPanelLayout(stored.left, stored.right);
+    }
+  } catch {
+    // Ignore malformed local preferences and use the defaults.
+  }
+  return fitPanelLayout(defaultPanelLayout().left, defaultPanelLayout().right);
+}
 const imageRoles: Record<string, string> = {
   auto: "自动判断用途",
   edit_source: "待编辑原图",
@@ -94,6 +160,52 @@ function Thumb({ asset }: { asset: Data }) {
     <div className="file-placeholder">
       {asset.media_type === "video" ? <Video /> : <FileText />}
       <span>{asset.media_type}</span>
+    </div>
+  );
+}
+
+function PanelResizer({
+  side,
+  value,
+  onPointerDown,
+  onNudge,
+  onReset,
+}: {
+  side: "left" | "right";
+  value: number;
+  onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onNudge: (delta: number) => void;
+  onReset: () => void;
+}) {
+  const min = side === "left" ? panelLimits.leftMin : panelLimits.rightMin;
+  const max = side === "left" ? panelLimits.leftMax : panelLimits.rightMax;
+  return (
+    <div
+      className={`panel-resizer ${side}`}
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={side === "left" ? "调整素材栏宽度" : "调整助手栏宽度"}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuenow={Math.round(value)}
+      tabIndex={0}
+      title="拖动调整宽度，双击恢复默认"
+      onPointerDown={onPointerDown}
+      onDoubleClick={onReset}
+      onKeyDown={(event) => {
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          onNudge(-16);
+        } else if (event.key === "ArrowRight") {
+          event.preventDefault();
+          onNudge(16);
+        } else if (event.key === "Home") {
+          event.preventDefault();
+          onReset();
+        }
+      }}
+    >
+      <span />
     </div>
   );
 }
@@ -121,6 +233,8 @@ export default function App() {
   const [pendingTags, setPendingTags] = useState<string[]>([]);
   const [tagEditing, setTagEditing] = useState<Data | null>(null);
   const [newSwitchTag, setNewSwitchTag] = useState("");
+  const [panelLayout, setPanelLayout] = useState(readPanelLayout);
+  const appShellRef = useRef<HTMLDivElement>(null);
   const [page, setPage] = useState(0);
   const [busy, setBusy] = useState(""),
     [toast, setToast] = useState("");
@@ -422,6 +536,24 @@ export default function App() {
     return () => clearTimeout(timeout);
   }, [toast]);
   useEffect(() => {
+    window.localStorage.setItem(
+      "aiv-panel-layout",
+      JSON.stringify(panelLayout),
+    );
+  }, [panelLayout]);
+  useEffect(() => {
+    const onResize = () =>
+      setPanelLayout((current) => {
+        const next = fitPanelLayout(current.left, current.right);
+        return next.left === current.left && next.right === current.right
+          ? current
+          : next;
+      });
+    window.addEventListener("resize", onResize);
+    onResize();
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  useEffect(() => {
     chatEnd.current?.scrollIntoView({ behavior: "smooth" });
   }, [cid, chatMessages.at(-1)?.id, draft?.revision]);
   useEffect(() => {
@@ -456,6 +588,72 @@ export default function App() {
         libraryRef.current.scrollTop = libraryScroll.current[libraryTab] ?? 0;
     });
   }, [libraryTab]);
+
+  function startPanelDrag(
+    side: "left" | "right",
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) {
+    if (event.button !== 0 || window.innerWidth <= 850) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const start = panelLayout;
+    let latest = start;
+    const maxTotal =
+      window.innerWidth - panelLimits.centerMin - panelLimits.handle * 2;
+    document.body.classList.add("resizing-panels");
+
+    const move = (moveEvent: PointerEvent) => {
+      if (side === "left") {
+        const left = clamp(
+          start.left + moveEvent.clientX - startX,
+          panelLimits.leftMin,
+          Math.min(panelLimits.leftMax, maxTotal - start.right),
+        );
+        latest = { left, right: start.right };
+      } else {
+        const right = clamp(
+          start.right + startX - moveEvent.clientX,
+          panelLimits.rightMin,
+          Math.min(panelLimits.rightMax, maxTotal - start.left),
+        );
+        latest = { left: start.left, right };
+      }
+      // Update the CSS variables directly so the 3-column layout and the
+      // canvas follow the pointer without re-rendering the whole workspace.
+      appShellRef.current?.style.setProperty(
+        "--left-width",
+        `${latest.left}px`,
+      );
+      appShellRef.current?.style.setProperty(
+        "--right-width",
+        `${latest.right}px`,
+      );
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      document.body.classList.remove("resizing-panels");
+      setPanelLayout(latest);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+  }
+
+  function nudgePanel(side: "left" | "right", delta: number) {
+    setPanelLayout((current) =>
+      fitPanelLayout(
+        side === "left" ? current.left + delta : current.left,
+        side === "right" ? current.right + delta : current.right,
+      ),
+    );
+  }
+
+  function resetPanelLayout() {
+    const defaults = defaultPanelLayout();
+    setPanelLayout(fitPanelLayout(defaults.left, defaults.right));
+  }
 
   function clearLocatedAsset() {
     setLocatedAsset(null);
@@ -950,7 +1148,16 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div
+      className="app-shell"
+      ref={appShellRef}
+      style={
+        {
+          "--left-width": `${panelLayout.left}px`,
+          "--right-width": `${panelLayout.right}px`,
+        } as CSSProperties
+      }
+    >
       <header className="topbar">
         <a
           className="brand"
@@ -1707,6 +1914,13 @@ export default function App() {
             }}
           />
         </aside>
+        <PanelResizer
+          side="left"
+          value={panelLayout.left}
+          onPointerDown={(event) => startPanelDrag("left", event)}
+          onNudge={(delta) => nudgePanel("left", delta)}
+          onReset={resetPanelLayout}
+        />
         <main
           className="canvas-panel"
           onDragOver={(e) => e.preventDefault()}
@@ -1880,6 +2094,13 @@ export default function App() {
             ))}
           </div>
         </main>
+        <PanelResizer
+          side="right"
+          value={panelLayout.right}
+          onPointerDown={(event) => startPanelDrag("right", event)}
+          onNudge={(delta) => nudgePanel("right", delta)}
+          onReset={resetPanelLayout}
+        />
         <aside className="assistant-panel">
           <div className="assistant-heading">
             <div className="assistant-logo">

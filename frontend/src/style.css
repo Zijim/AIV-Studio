@@ -229,11 +229,51 @@ small {
 }
 .workspace {
   display: grid;
-  grid-template-columns: 270px minmax(350px, 1fr) 356px;
+  grid-template-columns:
+    var(--left-width, 270px) 8px minmax(0, 1fr) 8px
+    var(--right-width, 356px);
   grid-template-rows: minmax(0, 1fr);
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+.panel-resizer {
+  position: relative;
+  z-index: 30;
+  align-self: stretch;
+  cursor: col-resize;
+  background: #17181b;
+  border-left: 1px solid #26272b;
+  border-right: 1px solid #26272b;
+  touch-action: none;
+}
+.panel-resizer::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: 38px;
+  transform: translate(-50%, -50%);
+  border-radius: 2px;
+  background: #3b3c42;
+  transition: background 0.15s;
+}
+.panel-resizer:hover,
+.panel-resizer:focus-visible {
+  background: #2c241e;
+  outline: none;
+}
+.panel-resizer:hover::after,
+.panel-resizer:focus-visible::after {
+  background: var(--accent);
+}
+body.resizing-panels {
+  cursor: col-resize;
+  user-select: none;
+}
+body.resizing-panels * {
+  cursor: col-resize !important;
 }
 .library-panel {
   background: var(--panel);
@@ -241,6 +281,7 @@ small {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
 }
 .project-switch {
   padding: 14px 17px 12px;
@@ -439,7 +480,7 @@ small {
 .asset-library {
   overflow: auto;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(82px, 1fr));
   gap: 12px 10px;
   padding: 0 17px 18px;
   align-content: start;
@@ -1023,6 +1064,8 @@ small {
   background-size: 20px 20px;
 }
 .canvas-image {
+  width: 100%;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   object-fit: contain;
@@ -1740,7 +1783,7 @@ details small {
 .task-drawer {
   position: absolute;
   bottom: 37px;
-  left: 270px;
+  left: var(--left-width, 270px);
   right: 0;
   max-height: 48vh;
   overflow: auto;
@@ -2440,12 +2483,6 @@ details small {
   background: transparent;
 }
 @media (min-width: 1600px) {
-  .workspace {
-    grid-template-columns: 300px minmax(400px, 1fr) 400px;
-  }
-  .task-drawer {
-    left: 300px;
-  }
   .conversation {
     padding: 25px;
   }
@@ -2454,9 +2491,6 @@ details small {
   }
 }
 @media (max-width: 1100px) {
-  .workspace {
-    grid-template-columns: 225px minmax(250px, 1fr) 315px;
-  }
   .topbar-middle > span:last-child {
     display: none;
   }
@@ -2466,9 +2500,6 @@ details small {
   .library-panel .asset-library {
     padding: 0 12px 15px;
     gap: 8px;
-  }
-  .task-drawer {
-    left: 225px;
   }
   .tool-strip > span {
     display: none;
@@ -2498,6 +2529,9 @@ details small {
     grid-template-rows: minmax(0, 65dvh) auto;
     min-height: 0;
     overflow: visible;
+  }
+  .panel-resizer {
+    display: none;
   }
   .assistant-panel {
     grid-column: 1/-1;
