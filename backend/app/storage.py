@@ -290,6 +290,7 @@ class Storage:
         value = " ".join(
             [
                 asset.name,
+                (membership.display_name or "") if membership else "",
                 asset.description,
                 project.name,
                 membership.note if membership else note,
@@ -307,6 +308,7 @@ class Storage:
     async def asset_view(self, session, asset, membership=None, tags=None):
         blob = await session.get(Blob, asset.blob_id)
         result = row_dict(asset)
+        result["original_name"] = asset.name
         result["conversation_id"] = (
             await session.scalar(
                 select(Task.conversation_id)
@@ -334,6 +336,8 @@ class Storage:
             project["tags"] = tags.get(asset.id, [])
             project["curated"] = bool(membership.curated_at)
             result["project"] = project
+            if membership.display_name:
+                result["name"] = membership.display_name
         return result
 
     async def reconcile(self):

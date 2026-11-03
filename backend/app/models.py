@@ -93,6 +93,7 @@ class ProjectAsset(Base):
     asset_id: Mapped[str] = mapped_column(ForeignKey("assets.id"), primary_key=True)
     usage: Mapped[str] = mapped_column(default="material")
     note: Mapped[str] = mapped_column(Text, default="")
+    display_name: Mapped[str | None] = mapped_column(String(120))
     tags: Mapped[list] = mapped_column(JSON, default=list)
     # Null means the asset belongs to the project warehouse only. A timestamp
     # records the explicit user act of putting it into the project's key set.

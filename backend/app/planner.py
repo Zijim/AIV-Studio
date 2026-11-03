@@ -569,7 +569,8 @@ class Planner:
                     assets.append(
                         {
                             "id": a.id,
-                            "name": a.name,
+                            "name": view["name"],
+                            "original_name": a.name,
                             "description": a.description[:500],
                             "description_source": "generation_prompt_or_import_metadata",
                             "note": m.note[:500],

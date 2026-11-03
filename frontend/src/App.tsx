@@ -33,6 +33,7 @@ import {
   Maximize2,
   MessageSquare,
   MoreHorizontal,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
@@ -1446,20 +1447,37 @@ export default function App() {
                         )}
                       </span>
                     )}
-                    {(libraryTab === "key" || curated) && (
-                      <button
-                        type="button"
-                        className="tag-edit"
-                        title="直接调整这份素材的标签"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setTagEditing(a);
-                        }}
-                      >
-                        <Tag size={11} />
-                        {assetTags.length ? "换标签" : "打标签"}
-                      </button>
-                    )}
+                    <div className="asset-actions">
+                      {writable && (
+                        <button
+                          type="button"
+                          className="tag-edit"
+                          title="重命名这份素材"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setFocus(a);
+                            setModal("asset");
+                          }}
+                        >
+                          <Pencil size={11} />
+                          改名
+                        </button>
+                      )}
+                      {(libraryTab === "key" || curated) && (
+                        <button
+                          type="button"
+                          className="tag-edit"
+                          title="直接调整这份素材的标签"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setTagEditing(a);
+                          }}
+                        >
+                          <Tag size={11} />
+                          {assetTags.length ? "换标签" : "打标签"}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
@@ -2978,7 +2996,8 @@ function AssetDialog({
     queryKey: ["detail", asset.id],
     queryFn: () => api(`/assets/${asset.id}`),
   });
-  const [note, setNote] = useState(asset.project?.note || ""),
+  const [name, setName] = useState(asset.project?.display_name || asset.name),
+    [note, setNote] = useState(asset.project?.note || ""),
     [tagIds, setTagIds] = useState<string[]>(
       (asset.project?.tags || []).map((tag: Data) => tag.id),
     ),
@@ -3009,6 +3028,19 @@ function AssetDialog({
           文件大小<strong>{bytes(asset.byte_size)}</strong>
         </span>
       </div>
+      <label>
+        素材名称（仅本项目）
+        <input
+          maxLength={120}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder={asset.original_name || asset.name}
+        />
+        <small className="muted">
+          只改本项目里的显示名，原文件名保留为{" "}
+          {asset.original_name || asset.name}；留空恢复原名。
+        </small>
+      </label>
       <label>
         在本项目中的用途
         <select value={usage} onChange={(e) => setUsage(e.target.value)}>
@@ -3166,6 +3198,7 @@ function AssetDialog({
           onClick={() =>
             action("note", async () => {
               await api(`/projects/${project.id}/assets/${asset.id}`, "PATCH", {
+                name,
                 note,
                 usage,
                 revision: loadedRevision,

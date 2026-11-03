@@ -106,7 +106,8 @@ async def resolve_task_media(session, tasks, executions, storage, registry):
                 )
                 cached[key] = dict(
                     asset_id=asset.id,
-                    name=asset.name,
+                    name=membership.display_name if membership and membership.display_name else asset.name,
+                    original_name=asset.name,
                     media_type=asset.media_type,
                     media_info=asset.media_info,
                     presence="changed"

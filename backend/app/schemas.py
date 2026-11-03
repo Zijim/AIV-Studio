@@ -125,6 +125,7 @@ PARAMETER_MODELS = {
 
 
 class AssetNote(StrictModel):
+    name: str | None = Field(default=None, max_length=120)
     note: str | None = Field(default=None, max_length=12000)
     usage: Literal["material", "reference", "output"] | None = None
     # Legacy name-based tags: omitted means "leave tags unchanged". The asset

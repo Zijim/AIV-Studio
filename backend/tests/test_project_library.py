@@ -224,6 +224,52 @@ class ProjectLibraryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(key.json()["total"], 1)
 
+    async def test_project_scoped_display_name(self):
+        project_a = await self.project("A")
+        project_b = await self.project("B")
+        asset_id = await self.imported(project_a, "portrait.txt", b"portrait")
+        renamed = await self.client.patch(
+            f"/api/v1/projects/{project_a}/assets/{asset_id}",
+            headers=self.headers,
+            json={"name": "  主角定妆  "},
+        )
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+
+        listed = await self.client.get(
+            f"/api/v1/projects/{project_a}/assets", headers=self.headers
+        )
+        item = listed.json()["items"][0]
+        self.assertEqual(item["name"], "主角定妆")
+        self.assertEqual(item["original_name"], "portrait.txt")
+        self.assertEqual(item["project"]["display_name"], "主角定妆")
+
+        attached = await self.client.post(
+            f"/api/v1/projects/{project_b}/assets/{asset_id}/attach",
+            headers=self.headers,
+        )
+        self.assertEqual(attached.status_code, 200, attached.text)
+        other = await self.client.get(
+            f"/api/v1/projects/{project_b}/assets", headers=self.headers
+        )
+        self.assertEqual(other.json()["items"][0]["name"], "portrait.txt")
+        self.assertEqual(other.json()["items"][0]["original_name"], "portrait.txt")
+
+        search = await self.client.get(
+            f"/api/v1/projects/{project_a}/assets?q=主角定妆", headers=self.headers
+        )
+        self.assertEqual(search.json()["total"], 1)
+
+        cleared = await self.client.patch(
+            f"/api/v1/projects/{project_a}/assets/{asset_id}",
+            headers=self.headers,
+            json={"name": ""},
+        )
+        self.assertEqual(cleared.status_code, 200, cleared.text)
+        listed = await self.client.get(
+            f"/api/v1/projects/{project_a}/assets", headers=self.headers
+        )
+        self.assertEqual(listed.json()["items"][0]["name"], "portrait.txt")
+
     async def test_legacy_note_tags_promote_to_key_library(self):
         project_id = await self.project()
         asset_id = await self.imported(project_id)

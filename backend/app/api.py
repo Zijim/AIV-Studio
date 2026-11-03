@@ -521,7 +521,11 @@ async def import_files(request: Request, project_id: str, files: list[UploadFile
             items.append({"name": upload.filename, "state": "saved", "asset_id": asset_id})
         except Exception as exc:
             items.append(
-                {"name": upload.filename, "state": "failed", "error": getattr(exc, "message", type(exc).__name__)}
+                {
+                    "name": upload.filename,
+                    "state": "failed",
+                    "error": getattr(exc, "message", "") or f"{type(exc).__name__}: {exc}",
+                }
             )
         finally:
             await upload.close()
@@ -569,7 +573,10 @@ async def edit_note(request: Request, project_id: str, asset_id: str, body: Asse
         if not m or m.removed_at:
             raise AppError("asset_not_found", "项目素材不存在。", 404)
         if body.revision is not None and body.revision != m.revision:
-            raise AppError("revision_conflict", "素材备注已变化，请刷新。", 409)
+            raise AppError("revision_conflict", "素材信息已变化，请刷新。", 409)
+        if body.name is not None:
+            value = " ".join(body.name.split())[:120]
+            m.display_name = value or None
         if body.note is not None:
             m.note = body.note
         if body.usage is not None:

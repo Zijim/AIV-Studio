@@ -330,7 +330,11 @@ class GuidedFlow:
             if not asset["selected"] and not self.request.revise_plan:
                 if not ref.reference_text or ref.reference_text not in self.context["user_request"]:
                     raise ValueError("使用未选中的图片时须逐字引用用户本轮指代")
-                if asset["execution_id"] not in known_executions and asset["name"] not in self.context["user_request"]:
+                if (
+                    asset["execution_id"] not in known_executions
+                    and asset["name"] not in self.context["user_request"]
+                    and asset.get("original_name") not in self.context["user_request"]
+                ):
                     raise ValueError("不能任意使用未明确点名的素材库图片")
         if (
             self.goals.goal
