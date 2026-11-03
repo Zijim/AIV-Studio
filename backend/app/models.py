@@ -1,7 +1,18 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -83,8 +94,44 @@ class ProjectAsset(Base):
     usage: Mapped[str] = mapped_column(default="material")
     note: Mapped[str] = mapped_column(Text, default="")
     tags: Mapped[list] = mapped_column(JSON, default=list)
+    # Null means the asset belongs to the project warehouse only. A timestamp
+    # records the explicit user act of putting it into the project's key set.
+    curated_at: Mapped[str | None]
     removed_at: Mapped[str | None]
     revision: Mapped[int] = mapped_column(default=1)
+    created_at: Mapped[str] = mapped_column(default=now)
+
+
+class ProjectTag(Entity, Base):
+    __tablename__ = "project_tags"
+    __table_args__ = (
+        UniqueConstraint("project_id", "id", name="uq_project_tags_project_id"),
+        Index("ix_project_tags_project", "project_id", "position"),
+    )
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
+    name: Mapped[str] = mapped_column(String(60))
+    color: Mapped[str] = mapped_column(String(16), default="#e6a16e")
+    position: Mapped[int] = mapped_column(default=0)
+
+
+class ProjectAssetTag(Base):
+    __tablename__ = "project_asset_tags"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "asset_id"],
+            ["project_assets.project_id", "project_assets.asset_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "tag_id"],
+            ["project_tags.project_id", "project_tags.id"],
+            ondelete="CASCADE",
+        ),
+        Index("ix_project_asset_tags_tag", "tag_id"),
+    )
+    project_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    asset_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tag_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     created_at: Mapped[str] = mapped_column(default=now)
 
 

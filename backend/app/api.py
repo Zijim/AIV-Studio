@@ -6,7 +6,8 @@ import shutil
 import httpx
 from fastapi import APIRouter, Body, File, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import String, and_, func, or_, select, text
+from sqlalchemy import String, and_, delete, func, or_, select, text
+from sqlalchemy.exc import IntegrityError
 
 from .config import ROOT
 from .conversations import resolve_conversation
@@ -25,6 +26,8 @@ from .models import (
     Plan,
     Project,
     ProjectAsset,
+    ProjectAssetTag,
+    ProjectTag,
     Setting,
     Task,
     now,
@@ -35,12 +38,18 @@ from .models import (
 from .plans import ACTIVE_TASKS, require_project
 from .schemas import (
     AssetNote,
+    AssetTags,
     ExecutePlan,
+    KeyAssetsRemove,
+    KeyAssetsRequest,
     ManualPlan,
     MessageRequest,
     PlanPatch,
     ProjectCreate,
     ProjectUpdate,
+    TagAssets,
+    TagCreate,
+    TagPatch,
 )
 from .task_identity import execution_identity
 from .task_media import resolve_task_media
@@ -52,6 +61,154 @@ router = APIRouter(prefix="/api/v1")
 
 def svc(request):
     return request.app.state
+
+
+TAG_PALETTE = ("#e6a16e", "#8fb7a8", "#b6a1d8", "#d9a3a3", "#9fb8d9", "#c9bd8e", "#a8c28f", "#c39bc4")
+TAG_LIMIT = 100
+
+
+def clean_tag_name(value):
+    name = " ".join(value.split())[:24]
+    if not name:
+        raise AppError("tag_name", "标签名不能为空。")
+    return name
+
+
+def library_kind(asset):
+    if asset.origin == "imported":
+        return "imported"
+    if asset.role == "intermediate":
+        return "intermediate"
+    if asset.role == "preview":
+        return "preview"
+    if (asset.source_info or {}).get("internal_preparation"):
+        return "preparation"
+    return "final"
+
+
+async def require_tag(session, project_id, tag_id):
+    tag = await session.get(ProjectTag, tag_id)
+    if not tag or tag.project_id != project_id:
+        raise AppError("tag_not_found", "标签不存在。", 404)
+    return tag
+
+
+async def tag_counts(session, project_id):
+    rows = (
+        await session.execute(
+            select(ProjectAssetTag.tag_id, func.count())
+            .join(
+                ProjectAsset,
+                and_(
+                    ProjectAsset.project_id == ProjectAssetTag.project_id,
+                    ProjectAsset.asset_id == ProjectAssetTag.asset_id,
+                ),
+            )
+            .where(
+                ProjectAssetTag.project_id == project_id,
+                ProjectAsset.curated_at.is_not(None),
+                ProjectAsset.removed_at.is_(None),
+            )
+            .group_by(ProjectAssetTag.tag_id)
+        )
+    ).all()
+    return {tag_id: count for tag_id, count in rows}
+
+
+async def project_tag_views(session, project_id):
+    tags = list(
+        await session.scalars(
+            select(ProjectTag).where(ProjectTag.project_id == project_id).order_by(ProjectTag.position, ProjectTag.name)
+        )
+    )
+    counts = await tag_counts(session, project_id)
+    return [{**row_dict(tag), "count": counts.get(tag.id, 0)} for tag in tags]
+
+
+async def create_project_tag(session, project_id, name, color=None):
+    name = clean_tag_name(name)
+    existing = await session.scalar(
+        select(ProjectTag).where(
+            ProjectTag.project_id == project_id,
+            ProjectTag.name.collate("NOCASE") == name,
+        )
+    )
+    if existing:
+        raise AppError("tag_exists", "同名标签已存在。", 409)
+    tags = list(await session.scalars(select(ProjectTag).where(ProjectTag.project_id == project_id)))
+    if len(tags) >= TAG_LIMIT:
+        raise AppError("tag_limit", f"每个项目最多{TAG_LIMIT}个标签。", 409)
+    position = max((tag.position for tag in tags), default=-1) + 1
+    tag = ProjectTag(
+        id=uid(),
+        project_id=project_id,
+        name=name,
+        color=color or TAG_PALETTE[position % len(TAG_PALETTE)],
+        position=position,
+    )
+    session.add(tag)
+    await session.flush()
+    return tag
+
+
+async def validate_tag_ids(session, project_id, tag_ids):
+    ids = list(dict.fromkeys(tag_ids))
+    if not ids:
+        return []
+    tags = list(
+        await session.scalars(select(ProjectTag).where(ProjectTag.project_id == project_id, ProjectTag.id.in_(ids)))
+    )
+    if len(tags) != len(ids):
+        raise AppError("tag_not_found", "标签不属于当前项目或已删除。", 404)
+    return tags
+
+
+async def set_asset_tags(session, storage, project_id, asset_id, tag_ids):
+    membership = await session.get(ProjectAsset, (project_id, asset_id))
+    if not membership or membership.removed_at:
+        raise AppError("asset_not_found", "项目素材不存在。", 404)
+    tags = await validate_tag_ids(session, project_id, tag_ids)
+    await session.execute(
+        delete(ProjectAssetTag).where(
+            ProjectAssetTag.project_id == project_id,
+            ProjectAssetTag.asset_id == asset_id,
+        )
+    )
+    for tag in tags:
+        session.add(
+            ProjectAssetTag(project_id=project_id, asset_id=asset_id, tag_id=tag.id, created_at=now())
+        )
+    if tags and not membership.curated_at:
+        membership.curated_at = now()
+    asset = await session.get(Asset, asset_id)
+    await storage.index(session, project_id, asset)
+    return membership
+
+
+async def add_asset_tags(session, storage, project_id, asset_ids, tag_ids):
+    tags = await validate_tag_ids(session, project_id, tag_ids)
+    for asset_id in asset_ids:
+        membership = await session.get(ProjectAsset, (project_id, asset_id))
+        if not membership or membership.removed_at:
+            raise AppError("asset_not_found", "项目素材不存在。", 404)
+        if not membership.curated_at:
+            membership.curated_at = now()
+        existing = set(
+            await session.scalars(
+                select(ProjectAssetTag.tag_id).where(
+                    ProjectAssetTag.project_id == project_id,
+                    ProjectAssetTag.asset_id == asset_id,
+                )
+            )
+        )
+        for tag in tags:
+            if tag.id not in existing:
+                session.add(
+                    ProjectAssetTag(project_id=project_id, asset_id=asset_id, tag_id=tag.id, created_at=now())
+                )
+                existing.add(tag.id)
+        asset = await session.get(Asset, asset_id)
+        await storage.index(session, project_id, asset)
 
 
 @router.get("/session")
@@ -234,6 +391,12 @@ async def assets(
     project_id: str | None = None,
     q: str = "",
     media_type: str | None = None,
+    curated: bool | None = None,
+    tag_id: str | None = None,
+    origin: str | None = None,
+    role: str | None = None,
+    best: bool = False,
+    sort: str = "created",
     removed: bool = False,
     limit: int = Query(100, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -243,6 +406,14 @@ async def assets(
         if not cursor.isdecimal() or len(cursor) > 10:
             raise AppError("cursor_invalid", "分页位置无效。")
         offset = int(cursor)
+    if origin and origin not in ("imported", "generated"):
+        raise AppError("filter_invalid", "素材来源筛选无效。")
+    if role and role not in ("imported", "final", "preview", "intermediate"):
+        raise AppError("filter_invalid", "素材角色筛选无效。")
+    if sort not in ("created", "curated", "name"):
+        raise AppError("sort_invalid", "排序方式无效。")
+    if best and not project_id:
+        raise AppError("filter_invalid", "最佳候选筛选需要指定项目。")
     state = svc(request)
     async with state.db.session() as s:
         query = (
@@ -257,6 +428,31 @@ async def assets(
         query = query.where(ProjectAsset.removed_at.is_not(None) if removed else ProjectAsset.removed_at.is_(None))
         if media_type:
             query = query.where(Asset.media_type == media_type)
+        if curated is True:
+            query = query.where(ProjectAsset.curated_at.is_not(None))
+        elif curated is False:
+            query = query.where(ProjectAsset.curated_at.is_(None))
+        if tag_id:
+            if not project_id:
+                raise AppError("filter_invalid", "标签筛选需要指定项目。")
+            tag = await s.get(ProjectTag, tag_id)
+            if not tag or tag.project_id != project_id:
+                raise AppError("tag_not_found", "标签不存在。", 404)
+            query = query.join(
+                ProjectAssetTag,
+                and_(
+                    ProjectAssetTag.project_id == ProjectAsset.project_id,
+                    ProjectAssetTag.asset_id == Asset.id,
+                ),
+            ).where(ProjectAssetTag.tag_id == tag_id)
+        if origin:
+            query = query.where(Asset.origin == origin)
+        if role:
+            query = query.where(Asset.role == role)
+        if best:
+            query = query.where(
+                Asset.id.in_(select(Task.best_asset_id).where(Task.project_id == project_id, Task.best_asset_id.is_not(None)))
+            )
         if q.strip():
             term = q.strip().casefold()[:200]
             if len(term) >= 3:
@@ -273,9 +469,33 @@ async def assets(
                 matches, (matches.c.asset_id == Asset.id) & (matches.c.project_id == ProjectAsset.project_id)
             )
         total = await s.scalar(select(func.count()).select_from(query.subquery()))
-        rows = (await s.execute(query.order_by(Asset.created_at.desc()).offset(offset).limit(limit))).all()
+        ordering = {
+            "created": (Asset.created_at.desc(), Asset.id.desc()),
+            "curated": (ProjectAsset.curated_at.desc(), Asset.created_at.desc()),
+            "name": (Asset.name.asc(), Asset.created_at.desc()),
+        }[sort]
+        rows = (await s.execute(query.order_by(*ordering).offset(offset).limit(limit))).all()
+        tags = {}
+        grouped = {}
+        for asset, membership in rows:
+            grouped.setdefault(membership.project_id, []).append(asset.id)
+        for pid, asset_ids in grouped.items():
+            tags.update(await state.storage.tags_for(s, pid, asset_ids))
+        best_ids = {
+            value
+            for value in await s.scalars(
+                select(Task.best_asset_id).where(Task.best_asset_id.in_([a.id for a, _ in rows]))
+            )
+            if value
+        }
+        items = []
+        for asset, membership in rows:
+            view = await state.storage.asset_view(s, asset, membership, tags=tags)
+            view["kind"] = library_kind(asset)
+            view["best"] = asset.id in best_ids
+            items.append(view)
         return {
-            "items": [await state.storage.asset_view(s, a, m) for a, m in rows],
+            "items": items,
             "total": total,
             "offset": offset,
             "next_cursor": str(offset + limit) if offset + limit < total else None,
@@ -350,7 +570,24 @@ async def edit_note(request: Request, project_id: str, asset_id: str, body: Asse
             raise AppError("asset_not_found", "项目素材不存在。", 404)
         if body.revision is not None and body.revision != m.revision:
             raise AppError("revision_conflict", "素材备注已变化，请刷新。", 409)
-        m.note, m.usage, m.tags = body.note, body.usage, body.tags
+        if body.note is not None:
+            m.note = body.note
+        if body.usage is not None:
+            m.usage = body.usage
+        if body.tags is not None:
+            tag_ids = []
+            for value in body.tags:
+                name = clean_tag_name(value)
+                tag = await s.scalar(
+                    select(ProjectTag).where(
+                        ProjectTag.project_id == project_id,
+                        ProjectTag.name.collate("NOCASE") == name,
+                    )
+                )
+                if not tag:
+                    tag = await create_project_tag(s, project_id, name)
+                tag_ids.append(tag.id)
+            await set_asset_tags(s, svc(request).storage, project_id, asset_id, tag_ids)
         m.revision += 1
         p.revision += 1
         await svc(request).storage.index(s, project_id, await s.get(Asset, asset_id))
@@ -376,16 +613,274 @@ async def restore_asset(request: Request, project_id: str, asset_id: str):
     return await attach_asset(request, project_id, asset_id)
 
 
+@router.get("/projects/{project_id}/library/facets")
+async def library_facets(request: Request, project_id: str):
+    state = svc(request)
+    async with state.db.session() as s:
+        await require_project(s, project_id)
+        active = (ProjectAsset.project_id == project_id, ProjectAsset.removed_at.is_(None))
+        all_count = await s.scalar(select(func.count()).select_from(ProjectAsset).where(*active)) or 0
+        key_count = (
+            await s.scalar(
+                select(func.count()).select_from(ProjectAsset).where(*active, ProjectAsset.curated_at.is_not(None))
+            )
+            or 0
+        )
+        trash_count = (
+            await s.scalar(
+                select(func.count())
+                .select_from(ProjectAsset)
+                .where(ProjectAsset.project_id == project_id, ProjectAsset.removed_at.is_not(None))
+            )
+            or 0
+        )
+        origins = dict(
+            (
+                await s.execute(
+                    select(Asset.origin, func.count())
+                    .join(ProjectAsset, ProjectAsset.asset_id == Asset.id)
+                    .where(*active)
+                    .group_by(Asset.origin)
+                )
+            ).all()
+        )
+        roles = dict(
+            (
+                await s.execute(
+                    select(Asset.role, func.count())
+                    .join(ProjectAsset, ProjectAsset.asset_id == Asset.id)
+                    .where(*active)
+                    .group_by(Asset.role)
+                )
+            ).all()
+        )
+        media_types = dict(
+            (
+                await s.execute(
+                    select(Asset.media_type, func.count())
+                    .join(ProjectAsset, ProjectAsset.asset_id == Asset.id)
+                    .where(*active)
+                    .group_by(Asset.media_type)
+                )
+            ).all()
+        )
+        best = (
+            await s.scalar(
+                select(func.count()).select_from(Task).where(Task.project_id == project_id, Task.best_asset_id.is_not(None))
+            )
+            or 0
+        )
+        return {
+            "all": all_count,
+            "key": key_count,
+            "uncurated": all_count - key_count,
+            "trash": trash_count,
+            "best": best,
+            "origins": origins,
+            "roles": roles,
+            "media_types": media_types,
+            "tags": await project_tag_views(s, project_id),
+        }
+
+
+@router.get("/projects/{project_id}/tags")
+async def list_tags(request: Request, project_id: str):
+    async with svc(request).db.session() as s:
+        await require_project(s, project_id)
+        return await project_tag_views(s, project_id)
+
+
+@router.post("/projects/{project_id}/tags", status_code=201)
+async def create_tag(request: Request, project_id: str, body: TagCreate):
+    state = svc(request)
+    async with state.db.transaction() as s:
+        await require_project(s, project_id, writable=True)
+        try:
+            tag = await create_project_tag(s, project_id, body.name, body.color)
+        except IntegrityError as exc:
+            raise AppError("tag_exists", "同名标签已存在。", 409) from exc
+        record_event(s, "library.updated", project_id, tag.id, action="tag.create", tag_id=tag.id)
+        return {**row_dict(tag), "count": 0}
+
+
+@router.patch("/projects/{project_id}/tags/{tag_id}")
+async def edit_tag(request: Request, project_id: str, tag_id: str, body: TagPatch):
+    state = svc(request)
+    async with state.db.transaction() as s:
+        await require_project(s, project_id, writable=True)
+        tag = await require_tag(s, project_id, tag_id)
+        renamed = False
+        if body.name is not None:
+            name = clean_tag_name(body.name)
+            if name.casefold() != tag.name.casefold():
+                duplicate = await s.scalar(
+                    select(ProjectTag).where(
+                        ProjectTag.project_id == project_id,
+                        ProjectTag.id != tag.id,
+                        ProjectTag.name.collate("NOCASE") == name,
+                    )
+                )
+                if duplicate:
+                    raise AppError("tag_exists", "同名标签已存在。", 409)
+                tag.name = name
+                renamed = True
+        if body.color is not None:
+            tag.color = body.color
+        if body.position is not None:
+            tag.position = body.position
+        if renamed:
+            asset_ids = list(
+                await s.scalars(
+                    select(ProjectAssetTag.asset_id).where(
+                        ProjectAssetTag.project_id == project_id, ProjectAssetTag.tag_id == tag.id
+                    )
+                )
+            )
+            for asset_id in asset_ids:
+                asset = await s.get(Asset, asset_id)
+                if asset:
+                    await state.storage.index(s, project_id, asset)
+        record_event(s, "library.updated", project_id, tag.id, action="tag.update", tag_id=tag.id)
+        counts = await tag_counts(s, project_id)
+        return {**row_dict(tag), "count": counts.get(tag.id, 0)}
+
+
+@router.delete("/projects/{project_id}/tags/{tag_id}")
+async def delete_tag(request: Request, project_id: str, tag_id: str):
+    state = svc(request)
+    async with state.db.transaction() as s:
+        await require_project(s, project_id, writable=True)
+        tag = await require_tag(s, project_id, tag_id)
+        asset_ids = list(
+            await s.scalars(
+                select(ProjectAssetTag.asset_id).where(
+                    ProjectAssetTag.project_id == project_id, ProjectAssetTag.tag_id == tag.id
+                )
+            )
+        )
+        await s.execute(
+            delete(ProjectAssetTag).where(
+                ProjectAssetTag.project_id == project_id, ProjectAssetTag.tag_id == tag.id
+            )
+        )
+        await s.delete(tag)
+        for asset_id in asset_ids:
+            asset = await s.get(Asset, asset_id)
+            if asset:
+                await state.storage.index(s, project_id, asset)
+        record_event(s, "library.updated", project_id, tag_id, action="tag.delete", tag_id=tag_id)
+        return {"deleted": True, "asset_ids": asset_ids}
+
+
+@router.post("/projects/{project_id}/tags/{tag_id}/assets")
+async def tag_assets(request: Request, project_id: str, tag_id: str, body: TagAssets):
+    state = svc(request)
+    async with state.db.transaction() as s:
+        await require_project(s, project_id, writable=True)
+        tag = await require_tag(s, project_id, tag_id)
+        await add_asset_tags(s, state.storage, project_id, body.asset_ids, [tag.id])
+        record_event(
+            s,
+            "library.updated",
+            project_id,
+            tag.id,
+            action="tag.assets",
+            tag_id=tag.id,
+            asset_ids=body.asset_ids,
+        )
+        return {"tag_id": tag.id, "asset_ids": body.asset_ids}
+
+
+@router.put("/projects/{project_id}/assets/{asset_id}/tags")
+async def set_tags(request: Request, project_id: str, asset_id: str, body: AssetTags):
+    state = svc(request)
+    async with state.db.transaction() as s:
+        await require_project(s, project_id, writable=True)
+        await set_asset_tags(s, state.storage, project_id, asset_id, body.tag_ids)
+        record_event(
+            s,
+            "library.updated",
+            project_id,
+            asset_id,
+            action="asset.tags",
+            asset_id=asset_id,
+            tag_ids=body.tag_ids,
+        )
+        return {"asset_id": asset_id, "tag_ids": body.tag_ids}
+
+
+@router.post("/projects/{project_id}/key-assets")
+async def add_key_assets(request: Request, project_id: str, body: KeyAssetsRequest):
+    state = svc(request)
+    async with state.db.transaction() as s:
+        await require_project(s, project_id, writable=True)
+        await add_asset_tags(s, state.storage, project_id, body.asset_ids, body.tag_ids)
+        record_event(
+            s,
+            "library.updated",
+            project_id,
+            body.asset_ids[0],
+            action="key.add",
+            asset_ids=body.asset_ids,
+            tag_ids=body.tag_ids,
+        )
+        return {"asset_ids": body.asset_ids, "tag_ids": body.tag_ids}
+
+
+@router.post("/projects/{project_id}/key-assets/remove")
+async def remove_key_assets(request: Request, project_id: str, body: KeyAssetsRemove):
+    state = svc(request)
+    async with state.db.transaction() as s:
+        await require_project(s, project_id, writable=True)
+        memberships = list(
+            await s.scalars(
+                select(ProjectAsset).where(
+                    ProjectAsset.project_id == project_id, ProjectAsset.asset_id.in_(body.asset_ids)
+                )
+            )
+        )
+        found = {m.asset_id for m in memberships}
+        if found != set(body.asset_ids):
+            raise AppError("asset_not_found", "部分素材不属于当前项目。", 404)
+        for membership in memberships:
+            membership.curated_at = None
+        await s.execute(
+            delete(ProjectAssetTag).where(
+                ProjectAssetTag.project_id == project_id, ProjectAssetTag.asset_id.in_(body.asset_ids)
+            )
+        )
+        for asset_id in body.asset_ids:
+            asset = await s.get(Asset, asset_id)
+            if asset:
+                await state.storage.index(s, project_id, asset)
+        record_event(
+            s,
+            "library.updated",
+            project_id,
+            body.asset_ids[0],
+            action="key.remove",
+            asset_ids=body.asset_ids,
+        )
+        return {"asset_ids": body.asset_ids}
+
+
 @router.get("/assets/{asset_id}")
 async def asset_detail(request: Request, asset_id: str):
-    async with svc(request).db.session() as s:
+    state = svc(request)
+    async with state.db.session() as s:
         a = await s.get(Asset, asset_id)
         if not a:
             raise AppError("asset_not_found", "素材不存在。", 404)
-        result = await svc(request).storage.asset_view(s, a)
-        result["projects"] = [
-            row_dict(m) for m in (await s.scalars(select(ProjectAsset).where(ProjectAsset.asset_id == asset_id))).all()
-        ]
+        result = await state.storage.asset_view(s, a)
+        projects = []
+        for m in (
+            await s.scalars(select(ProjectAsset).where(ProjectAsset.asset_id == asset_id))
+        ).all():
+            view = row_dict(m)
+            view["tags"] = (await state.storage.tags_for(s, m.project_id, [asset_id])).get(asset_id, [])
+            view["curated"] = bool(m.curated_at)
+            projects.append(view)
+        result["projects"] = projects
         if a.execution_id:
             e = await s.get(Execution, a.execution_id)
             result["execution"] = row_dict(e)

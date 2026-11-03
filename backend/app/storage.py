@@ -9,7 +9,19 @@ from sqlalchemy import select, text
 
 from .errors import AppError
 from .media import inspect_file
-from .models import Asset, AssetRelation, Blob, Execution, ProjectAsset, Task, record_event, row_dict, uid
+from .models import (
+    Asset,
+    AssetRelation,
+    Blob,
+    Execution,
+    ProjectAsset,
+    ProjectAssetTag,
+    ProjectTag,
+    Task,
+    record_event,
+    row_dict,
+    uid,
+)
 
 
 def file_hash(path):
@@ -238,18 +250,50 @@ class Storage:
             record_event(session, "asset.saved", project_id, asset_id, asset_id=asset_id)
         return asset_id
 
+    async def tags_for(self, session, project_id, asset_ids):
+        """Return normalized tags grouped by asset id for one project."""
+        ids = list(dict.fromkeys(asset_ids))
+        if not ids:
+            return {}
+        rows = (
+            await session.execute(
+                select(ProjectAssetTag.asset_id, ProjectTag.id, ProjectTag.name, ProjectTag.color)
+                .join(ProjectTag, (ProjectTag.id == ProjectAssetTag.tag_id) & (ProjectTag.project_id == ProjectAssetTag.project_id))
+                .where(ProjectAssetTag.project_id == project_id, ProjectAssetTag.asset_id.in_(ids))
+                .order_by(ProjectTag.position, ProjectTag.name, ProjectTag.id)
+            )
+        ).all()
+        result = {}
+        for asset_id, tag_id, name, color in rows:
+            result.setdefault(asset_id, []).append({"id": tag_id, "name": name, "color": color})
+        return result
+
     async def index(self, session, project_id, asset, note="", tags=None):
         from .models import Project
 
         project = await session.get(Project, project_id)
         membership = await session.get(ProjectAsset, (project_id, asset.id))
+        tag_names = list(
+            await session.scalars(
+                select(ProjectTag.name)
+                .join(
+                    ProjectAssetTag,
+                    (ProjectAssetTag.tag_id == ProjectTag.id) & (ProjectAssetTag.project_id == ProjectTag.project_id),
+                )
+                .where(ProjectAssetTag.project_id == project_id, ProjectAssetTag.asset_id == asset.id)
+                .order_by(ProjectTag.position, ProjectTag.name)
+            )
+        )
+        if not tag_names and membership and membership.tags:
+            # Fallback for records that predate the normalized tag backfill.
+            tag_names = list(membership.tags)
         value = " ".join(
             [
                 asset.name,
                 asset.description,
                 project.name,
                 membership.note if membership else note,
-                " ".join(membership.tags if membership else (tags or [])),
+                " ".join(tag_names),
                 asset.source_info.get("tool_name", ""),
             ]
         ).casefold()
@@ -260,7 +304,7 @@ class Storage:
             {"key": key, "project": project_id, "asset": asset.id, "body": value},
         )
 
-    async def asset_view(self, session, asset, membership=None):
+    async def asset_view(self, session, asset, membership=None, tags=None):
         blob = await session.get(Blob, asset.blob_id)
         result = row_dict(asset)
         result["conversation_id"] = (
@@ -284,7 +328,12 @@ class Storage:
             else None,
         )
         if membership:
-            result["project"] = row_dict(membership)
+            project = row_dict(membership)
+            if tags is None:
+                tags = await self.tags_for(session, membership.project_id, [asset.id])
+            project["tags"] = tags.get(asset.id, [])
+            project["curated"] = bool(membership.curated_at)
+            result["project"] = project
         return result
 
     async def reconcile(self):

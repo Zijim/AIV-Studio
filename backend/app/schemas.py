@@ -125,10 +125,72 @@ PARAMETER_MODELS = {
 
 
 class AssetNote(StrictModel):
-    note: str = Field(default="", max_length=12000)
-    usage: Literal["material", "reference", "output"] = "material"
-    tags: list[str] = Field(default_factory=list, max_length=30)
+    note: str | None = Field(default=None, max_length=12000)
+    usage: Literal["material", "reference", "output"] | None = None
+    # Legacy name-based tags: omitted means "leave tags unchanged". The asset
+    # tag endpoint is the authoritative way to edit normalized tags.
+    tags: list[str] | None = Field(default=None, max_length=30)
     revision: int | None = None
+
+
+class KeyAssetsRequest(StrictModel):
+    asset_ids: list[str] = Field(min_length=1, max_length=200)
+    tag_ids: list[str] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="after")
+    def unique_ids(self):
+        if len(set(self.asset_ids)) != len(self.asset_ids):
+            raise ValueError("素材不能重复")
+        if len(set(self.tag_ids)) != len(self.tag_ids):
+            raise ValueError("标签不能重复")
+        return self
+
+
+class KeyAssetsRemove(StrictModel):
+    asset_ids: list[str] = Field(min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def unique_ids(self):
+        if len(set(self.asset_ids)) != len(self.asset_ids):
+            raise ValueError("素材不能重复")
+        return self
+
+
+class TagCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=24)
+    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+
+
+class TagPatch(StrictModel):
+    name: str | None = Field(default=None, min_length=1, max_length=24)
+    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    position: int | None = Field(default=None, ge=0, le=10000)
+
+    @model_validator(mode="after")
+    def has_change(self):
+        if self.name is None and self.color is None and self.position is None:
+            raise ValueError("没有需要修改的字段")
+        return self
+
+
+class AssetTags(StrictModel):
+    tag_ids: list[str] = Field(default_factory=list, max_length=30)
+
+    @model_validator(mode="after")
+    def unique_ids(self):
+        if len(set(self.tag_ids)) != len(self.tag_ids):
+            raise ValueError("标签不能重复")
+        return self
+
+
+class TagAssets(StrictModel):
+    asset_ids: list[str] = Field(min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def unique_ids(self):
+        if len(set(self.asset_ids)) != len(self.asset_ids):
+            raise ValueError("素材不能重复")
+        return self
 
 
 class RevisePlan(StrictModel):

@@ -41,6 +41,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Star,
+  Tag,
   Trash2,
   Upload,
   Video,
@@ -109,6 +110,16 @@ export default function App() {
   const [search, setSearch] = useState(""),
     [filter, setFilter] = useState("");
   const [trash, setTrash] = useState(false);
+  const [libraryTab, setLibraryTab] = useState<"all" | "key">("all");
+  const [tagId, setTagId] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const [tagManagerOpen, setTagManagerOpen] = useState(false);
+  const [newTagName, setNewTagName] = useState("");
+  const [pendingTags, setPendingTags] = useState<string[]>([]);
+  const [tagEditing, setTagEditing] = useState<Data | null>(null);
+  const [newSwitchTag, setNewSwitchTag] = useState("");
   const [page, setPage] = useState(0);
   const [busy, setBusy] = useState(""),
     [toast, setToast] = useState("");
@@ -118,12 +129,15 @@ export default function App() {
   const [focusTaskId, setFocusTaskId] = useState<string | null>(null);
   const [returnTaskId, setReturnTaskId] = useState<string | null>(null);
   const libraryRef = useRef<HTMLDivElement>(null);
-  const libraryScroll = useRef(0);
+  const libraryScroll = useRef<Record<string, number>>({ all: 0, key: 0 });
   const lastAssetLink = useRef("");
+  const tabProject = useRef("");
+  const previousTab = useRef<"all" | "key">("all");
   const browsingTaskMedia = useRef(false);
   browsingTaskMedia.current = !!locatedAsset || !!taskPreview;
   const files = useRef<HTMLInputElement>(null),
-    folders = useRef<HTMLInputElement>(null);
+    folders = useRef<HTMLInputElement>(null),
+    keyFiles = useRef<HTMLInputElement>(null);
   const chatEnd = useRef<HTMLDivElement>(null);
   const projects = useQuery({
     queryKey: ["projects"],
@@ -154,12 +168,36 @@ export default function App() {
   function setMessage(value: string) {
     if (cid) store.setMessageDraft(cid, value);
   }
+  const facets = useQuery({
+    queryKey: ["library-facets", store.projectId],
+    queryFn: () => api(`/projects/${store.projectId}/library/facets`),
+    enabled: !!project,
+  });
+  const tags: Data[] = facets.data?.tags ?? [];
   const assets = useQuery({
-    queryKey: ["assets", store.projectId, search, filter, trash, page],
-    queryFn: () =>
-      api(
-        `/projects/${store.projectId}/assets?q=${encodeURIComponent(search)}&media_type=${filter}&removed=${trash}&offset=${page * 100}`,
-      ),
+    queryKey: [
+      "assets",
+      store.projectId,
+      search,
+      filter,
+      trash,
+      page,
+      libraryTab,
+      tagId,
+    ],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        q: search,
+        media_type: filter,
+        removed: String(trash),
+        offset: String(page * 100),
+      });
+      if (!trash) {
+        if (libraryTab === "key") params.set("curated", "true");
+        if (tagId) params.set("tag_id", tagId);
+      }
+      return api(`/projects/${store.projectId}/assets?${params}`);
+    },
     enabled: !!project,
   });
   const messages = useInfiniteQuery({
@@ -196,6 +234,9 @@ export default function App() {
   });
   const draft = plans.data?.find((p) => p.state === "draft");
   const allAssets: Data[] = assets.data?.items ?? [];
+  const tagEditingAsset = tagEditing
+    ? (allAssets.find((item) => item.id === tagEditing.id) ?? tagEditing)
+    : null;
   const selectedAssets = useQuery({
     queryKey: ["selected-assets", store.projectId, store.selected],
     queryFn: () =>
@@ -360,8 +401,16 @@ export default function App() {
             : type.startsWith("conversation.")
               ? ["conversations"]
               : type.startsWith("project.")
-                ? ["projects", "assets"]
-                : ["assets", "detail", "tasks", "task-detail"];
+                ? ["projects", "assets", "library-facets"]
+                : type.startsWith("library.")
+                  ? ["assets", "library-facets", "detail"]
+                  : [
+                      "assets",
+                      "library-facets",
+                      "detail",
+                      "tasks",
+                      "task-detail",
+                    ];
       keys.forEach((key) => queryClient.invalidateQueries({ queryKey: [key] }));
     };
     return () => source.close();
@@ -380,6 +429,32 @@ export default function App() {
       if (fresh) setFocus(fresh);
     }
   }, [assets.data]);
+  useEffect(() => {
+    setPage(0);
+  }, [search, filter, trash, libraryTab, tagId]);
+  useEffect(() => {
+    if (!project || tabProject.current === project.id) return;
+    tabProject.current = project.id;
+    const params = new URLSearchParams(location.search);
+    setLibraryTab(params.get("tab") === "key" ? "key" : "all");
+    setTagId(params.get("tag"));
+    setPicked([]);
+    setPicking(false);
+    setTagPickerOpen(false);
+    setTagManagerOpen(false);
+  }, [project?.id]);
+  useEffect(() => {
+    if (!tagId || !facets.data) return;
+    if (!tags.some((tag) => tag.id === tagId)) setTagId(null);
+  }, [facets.data, tagId]);
+  useEffect(() => {
+    if (previousTab.current === libraryTab) return;
+    previousTab.current = libraryTab;
+    requestAnimationFrame(() => {
+      if (libraryRef.current)
+        libraryRef.current.scrollTop = libraryScroll.current[libraryTab] ?? 0;
+    });
+  }, [libraryTab]);
 
   function clearLocatedAsset() {
     setLocatedAsset(null);
@@ -389,7 +464,7 @@ export default function App() {
     navigate(`${location.pathname}?${params}`, { replace: true });
     requestAnimationFrame(() => {
       if (libraryRef.current)
-        libraryRef.current.scrollTop = libraryScroll.current;
+        libraryRef.current.scrollTop = libraryScroll.current[libraryTab] ?? 0;
     });
   }
 
@@ -412,7 +487,7 @@ export default function App() {
         throw new Error("此素材不属于当前项目，无法在本项目定位。");
       if (item.presence === "changed")
         throw new Error("素材版本与任务记录不一致，不能定位为原输入。");
-      libraryScroll.current = libraryRef.current?.scrollTop ?? 0;
+      libraryScroll.current[libraryTab] = libraryRef.current?.scrollTop ?? 0;
       const value = {
         ...asset,
         project: membership,
@@ -490,7 +565,8 @@ export default function App() {
               throw new Error("素材版本与任务输入不一致。");
           }
           if (cancelled) return;
-          libraryScroll.current = libraryRef.current?.scrollTop ?? 0;
+          libraryScroll.current[libraryTab] =
+            libraryRef.current?.scrollTop ?? 0;
           const value = {
             ...asset,
             project: membership,
@@ -521,7 +597,204 @@ export default function App() {
     };
   }, [project?.id, location.search, location.pathname]);
 
-  async function importFiles(list: FileList | File[]) {
+  function chooseTab(value: "all" | "key") {
+    if (locatedAsset) return;
+    libraryScroll.current[libraryTab] = libraryRef.current?.scrollTop ?? 0;
+    setLibraryTab(value);
+    setTagId(null);
+    setPage(0);
+    setTagEditing(null);
+    const params = new URLSearchParams(location.search);
+    if (value === "key") params.set("tab", "key");
+    else params.delete("tab");
+    params.delete("tag");
+    navigate(`${location.pathname}?${params}`, { replace: true });
+  }
+
+  function chooseTag(value: string | null) {
+    if (locatedAsset) return;
+    setTagId(value);
+    setPage(0);
+    setTagEditing(null);
+    const params = new URLSearchParams(location.search);
+    if (value) {
+      params.set("tab", "key");
+      params.set("tag", value);
+    } else {
+      params.delete("tag");
+      if (libraryTab !== "key") params.delete("tab");
+    }
+    navigate(`${location.pathname}?${params}`, { replace: true });
+  }
+
+  function toggleTrash() {
+    setTrash(!trash);
+    setPage(0);
+    setLibraryTab("all");
+    setTagId(null);
+    setPicking(false);
+    setPicked([]);
+    setTagPickerOpen(false);
+    setTagManagerOpen(false);
+    setTagEditing(null);
+    const params = new URLSearchParams(location.search);
+    params.delete("tab");
+    params.delete("tag");
+    navigate(`${location.pathname}?${params}`, { replace: true });
+  }
+
+  async function toggleKey(asset: Data) {
+    if (!writable) return;
+    const curated = !!asset.project?.curated;
+    await action(
+      curated ? "unkey" : "key",
+      () =>
+        api(
+          curated
+            ? `/projects/${project!.id}/key-assets/remove`
+            : `/projects/${project!.id}/key-assets`,
+          "POST",
+          { asset_ids: [asset.id] },
+        ),
+      curated ? "已移出关键素材" : "已加入关键素材",
+    );
+  }
+
+  function togglePicked(id: string) {
+    setPicked((current) =>
+      current.includes(id)
+        ? current.filter((value) => value !== id)
+        : [...current, id],
+    );
+  }
+
+  async function addPicked(tagIds: string[] = []) {
+    if (!picked.length) return;
+    const ids = [...picked];
+    await action(
+      "key",
+      () =>
+        api(`/projects/${project!.id}/key-assets`, "POST", {
+          asset_ids: ids,
+          tag_ids: tagIds,
+        }),
+      `已加入 ${ids.length} 份关键素材`,
+    );
+    setPicked([]);
+    setPicking(false);
+    setTagPickerOpen(false);
+    setPendingTags([]);
+  }
+
+  async function removePicked() {
+    if (!picked.length) return;
+    const ids = [...picked];
+    await action(
+      "unkey",
+      () =>
+        api(`/projects/${project!.id}/key-assets/remove`, "POST", {
+          asset_ids: ids,
+        }),
+      `已移出 ${ids.length} 份关键素材`,
+    );
+    setPicked([]);
+    setPicking(false);
+    setTagPickerOpen(false);
+    setPendingTags([]);
+  }
+
+  async function createTag(name: string) {
+    const value = await action(
+      "tag",
+      () => api(`/projects/${project!.id}/tags`, "POST", { name }),
+      "标签已创建",
+    );
+    return value as Data | undefined;
+  }
+
+  async function renameTag(id: string, name: string) {
+    await action(
+      "tag",
+      () => api(`/projects/${project!.id}/tags/${id}`, "PATCH", { name }),
+      "标签已重命名",
+    );
+  }
+
+  async function recolorTag(id: string, color: string) {
+    await action(
+      "tag",
+      () => api(`/projects/${project!.id}/tags/${id}`, "PATCH", { color }),
+      "标签颜色已更新",
+    );
+  }
+
+  async function deleteTag(id: string) {
+    await action(
+      "tag",
+      () => api(`/projects/${project!.id}/tags/${id}`, "DELETE"),
+      "标签已删除，素材仍保留",
+    );
+    if (tagId === id) setTagId(null);
+  }
+
+  async function assignTag(asset: Data, tag: Data) {
+    const current = (asset.project?.tags ?? []).map((item: Data) => item.id);
+    if (current.includes(tag.id)) return;
+    await action(
+      "tag",
+      () =>
+        api(`/projects/${project!.id}/assets/${asset.id}/tags`, "PUT", {
+          tag_ids: [...current, tag.id],
+        }),
+      `已放入「${tag.name}」`,
+    );
+  }
+
+  async function toggleAssetTag(asset: Data, tag: Data) {
+    const current = (asset.project?.tags ?? []).map((item: Data) => item.id);
+    const next = current.includes(tag.id)
+      ? current.filter((id: string) => id !== tag.id)
+      : [...current, tag.id];
+    await action(
+      "tag",
+      () =>
+        api(`/projects/${project!.id}/assets/${asset.id}/tags`, "PUT", {
+          tag_ids: next,
+        }),
+      current.includes(tag.id)
+        ? `已从「${tag.name}」移出`
+        : `已放入「${tag.name}」`,
+    );
+  }
+
+  async function createAndAssignTag(name: string) {
+    if (!tagEditingAsset || !name.trim()) return;
+    const asset = tagEditingAsset;
+    const current = (asset.project?.tags ?? []).map((tag: Data) => tag.id);
+    const existing = tags.find((tag) => tag.name === name.trim());
+    await action(
+      "tag",
+      async () => {
+        const tagId =
+          existing?.id ??
+          (
+            await api(`/projects/${project!.id}/tags`, "POST", {
+              name: name.trim(),
+            })
+          ).id;
+        await api(`/projects/${project!.id}/assets/${asset.id}/tags`, "PUT", {
+          tag_ids: [...current, tagId],
+        });
+      },
+      existing ? `已加入「${name.trim()}」` : "标签已创建并加入",
+    );
+    setNewSwitchTag("");
+  }
+
+  async function importFiles(
+    list: FileList | File[],
+    target: "all" | "key" = "all",
+  ) {
     if (!writable || !list.length) return;
     const accepted = Array.from(list);
     const maxBatchBytes = access.maxUploadBytes
@@ -563,10 +836,18 @@ export default function App() {
           );
           results.push(...batch.items);
         }
+        const saved = results
+          .filter((item) => item.state === "saved" && item.asset_id)
+          .map((item) => item.asset_id);
+        if (target === "key" && saved.length) {
+          await api(`/projects/${project!.id}/key-assets`, "POST", {
+            asset_ids: saved,
+          });
+        }
         setImportResult({ items: results });
         setModal("import-result");
       },
-      "素材已归档到当前项目",
+      target === "key" ? "已导入并加入关键素材" : "素材已归档到当前项目",
     );
   }
   function openTool(value: Data, plan?: Data) {
@@ -813,25 +1094,67 @@ export default function App() {
               </span>
             )}
           </div>
-          <div className="library-heading">
-            <h2>
-              {trash ? "已移除素材" : "项目素材"}{" "}
-              <span>{assets.data?.total || 0}</span>
-            </h2>
-            <Button
-              title={trash ? "返回素材" : "素材回收站"}
-              disabled={!!locatedAsset}
-              onClick={() => setTrash(!trash)}
-            >
-              <Trash2 size={15} />
-            </Button>
-          </div>
+          {trash ? (
+            <div className="library-heading">
+              <h2>
+                已移除素材 <span>{assets.data?.total || 0}</span>
+              </h2>
+              <Button
+                title="返回素材"
+                disabled={!!locatedAsset}
+                onClick={toggleTrash}
+              >
+                <Trash2 size={15} />
+              </Button>
+            </div>
+          ) : (
+            <div className="library-tabbar">
+              <div
+                className="library-tabs"
+                role="tablist"
+                aria-label="素材库视图"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={libraryTab === "all"}
+                  className={libraryTab === "all" ? "active" : ""}
+                  disabled={!!locatedAsset}
+                  onClick={() => chooseTab("all")}
+                >
+                  全部素材{" "}
+                  <span>{facets.data?.all ?? (assets.data?.total || 0)}</span>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={libraryTab === "key"}
+                  className={libraryTab === "key" ? "active" : ""}
+                  disabled={!!locatedAsset}
+                  onClick={() => chooseTab("key")}
+                >
+                  关键素材 <span>{facets.data?.key ?? 0}</span>
+                </button>
+              </div>
+              <Button
+                title="素材回收站"
+                disabled={!!locatedAsset}
+                onClick={toggleTrash}
+              >
+                <Trash2 size={15} />
+              </Button>
+            </div>
+          )}
           <div className="search-box">
             <Search size={15} />
             <input
               aria-label="搜索素材"
               disabled={!!locatedAsset}
-              placeholder="搜索名称、备注、描述…"
+              placeholder={
+                libraryTab === "key"
+                  ? "搜索关键素材、标签、备注…"
+                  : "搜索名称、备注、描述…"
+              }
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -852,7 +1175,135 @@ export default function App() {
                 {label}
               </button>
             ))}
+            {!trash && libraryTab === "all" && (
+              <button
+                type="button"
+                className={`triage ${picking ? "active" : ""}`}
+                disabled={!!locatedAsset}
+                onClick={() => {
+                  setPicking(!picking);
+                  setPicked([]);
+                  setTagPickerOpen(false);
+                }}
+              >
+                {picking ? "退出整理" : "整理"}
+              </button>
+            )}
           </div>
+          {!trash && libraryTab === "key" && (
+            <>
+              <div className="tag-strip" aria-label="关键素材标签">
+                <button
+                  type="button"
+                  className={`tag-chip ${!tagId ? "active" : ""}`}
+                  disabled={!!locatedAsset}
+                  onClick={() => chooseTag(null)}
+                >
+                  全部 <em>{facets.data?.key ?? 0}</em>
+                </button>
+                {tags.map((tag) => (
+                  <button
+                    key={tag.id}
+                    type="button"
+                    className={`tag-chip ${tagId === tag.id ? "active" : ""}`}
+                    disabled={!!locatedAsset}
+                    title={`${tag.name} · ${tag.count} 份${
+                      writable ? "，可拖入素材" : ""
+                    }`}
+                    onClick={() => chooseTag(tagId === tag.id ? null : tag.id)}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "copy";
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const id = e.dataTransfer.getData("text/aiv-asset");
+                      const asset = allAssets.find((item) => item.id === id);
+                      if (asset) assignTag(asset, tag);
+                    }}
+                  >
+                    <i style={{ background: tag.color }} />
+                    {tag.name} <em>{tag.count}</em>
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="tag-chip tag-add"
+                  title="新建或管理标签"
+                  disabled={!!locatedAsset}
+                  onClick={() => setTagManagerOpen((value) => !value)}
+                >
+                  <Plus size={12} />
+                </button>
+              </div>
+              {tagManagerOpen && (
+                <TagManager
+                  tags={tags}
+                  busy={!!busy}
+                  onCreate={async (name) => {
+                    const tag = await createTag(name);
+                    if (tag) setTagId(tag.id);
+                  }}
+                  onRename={renameTag}
+                  onColor={recolorTag}
+                  onDelete={deleteTag}
+                  onClose={() => setTagManagerOpen(false)}
+                />
+              )}
+            </>
+          )}
+          {!trash && tagEditingAsset && (
+            <div className="tag-switch-panel">
+              <div className="tag-switch-head">
+                <span title={tagEditingAsset.name}>
+                  调整标签 · {tagEditingAsset.name}
+                </span>
+                <Button
+                  aria-label="关闭标签调整"
+                  onClick={() => setTagEditing(null)}
+                >
+                  <X size={13} />
+                </Button>
+              </div>
+              <div className="tag-switch-options">
+                {tags.map((tag) => {
+                  const on = (tagEditingAsset.project?.tags ?? []).some(
+                    (item: Data) => item.id === tag.id,
+                  );
+                  return (
+                    <button
+                      key={tag.id}
+                      type="button"
+                      className={`tag-choice ${on ? "on" : ""}`}
+                      disabled={!!busy}
+                      title={
+                        on ? `从「${tag.name}」移出` : `放入「${tag.name}」`
+                      }
+                      onClick={() => toggleAssetTag(tagEditingAsset, tag)}
+                    >
+                      <i style={{ background: tag.color }} />
+                      {tag.name}
+                    </button>
+                  );
+                })}
+                {!tags.length && <small>还没有标签，先在下面新建一个。</small>}
+              </div>
+              <div className="tag-picker-create">
+                <input
+                  aria-label="新建标签并加入"
+                  value={newSwitchTag}
+                  placeholder="新建标签并加入，如：场景/街道"
+                  onChange={(e) => setNewSwitchTag(e.target.value)}
+                />
+                <Button
+                  disabled={!newSwitchTag.trim() || !!busy}
+                  onClick={() => createAndAssignTag(newSwitchTag)}
+                >
+                  新建并加入
+                </Button>
+              </div>
+            </div>
+          )}
           {locatedAsset && (
             <div className="located-asset-panel">
               <div className="located-asset-notice">
@@ -885,59 +1336,160 @@ export default function App() {
             ref={libraryRef}
             hidden={!!locatedAsset}
           >
-            {allAssets.map((a) => (
-              <button
-                key={a.id}
-                className={`asset-card ${store.selected.includes(a.id) ? "selected" : ""}`}
-                onClick={(e) => {
-                  store.chooseAsset(a.id, e.ctrlKey || e.metaKey || e.shiftKey);
-                  setFocus(a);
-                }}
-                onDoubleClick={() => {
-                  setFocus(a);
-                  setModal("asset");
-                }}
-              >
-                <div className="asset-thumb">
-                  <Thumb asset={a} />
-                  {tasks.data?.some((t) => t.best_asset_id === a.id) && (
-                    <span className="best-badge" title="最佳候选">
-                      <Star size={12} fill="currentColor" />
-                    </span>
-                  )}
-                  {store.selected.includes(a.id) && (
-                    <span className="selected-tick">
-                      <Check size={12} />
-                    </span>
-                  )}
-                  {a.media_type === "video" && (
-                    <span className="media-badge">
-                      <Play size={11} />
-                      {a.media_info.duration?.toFixed(1)}s
-                    </span>
-                  )}
-                  {a.presence !== "available" && (
-                    <span className="missing-badge">{labels[a.presence]}</span>
-                  )}
+            {allAssets.map((a) => {
+              const curated = !!a.project?.curated;
+              const assetTags: Data[] = a.project?.tags ?? [];
+              const selected = picking
+                ? picked.includes(a.id)
+                : store.selected.includes(a.id);
+              return (
+                <div
+                  key={a.id}
+                  role="button"
+                  tabIndex={0}
+                  className={`asset-card ${selected ? "selected" : ""} ${
+                    curated ? "curated" : ""
+                  } ${picking ? "picking" : ""}`}
+                  draggable={writable && !picking}
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData("text/aiv-asset", a.id);
+                    e.dataTransfer.effectAllowed = "copy";
+                  }}
+                  onClick={(e) => {
+                    if (picking) {
+                      togglePicked(a.id);
+                      return;
+                    }
+                    store.chooseAsset(
+                      a.id,
+                      e.ctrlKey || e.metaKey || e.shiftKey,
+                    );
+                    setFocus(a);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter" && e.key !== " ") return;
+                    e.preventDefault();
+                    if (picking) togglePicked(a.id);
+                    else {
+                      setFocus(a);
+                      setModal("asset");
+                    }
+                  }}
+                  onDoubleClick={() => {
+                    if (picking) return;
+                    setFocus(a);
+                    setModal("asset");
+                  }}
+                >
+                  <div className="asset-thumb">
+                    <Thumb asset={a} />
+                    <button
+                      type="button"
+                      className={`curate-toggle ${curated ? "on" : ""}`}
+                      title={curated ? "移出关键素材" : "加入关键素材"}
+                      aria-label={curated ? "移出关键素材" : "加入关键素材"}
+                      disabled={!writable}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleKey(a);
+                      }}
+                    >
+                      <Star
+                        size={12}
+                        fill={curated ? "currentColor" : "none"}
+                      />
+                    </button>
+                    {selected && (
+                      <span className="selected-tick">
+                        <Check size={12} />
+                      </span>
+                    )}
+                    {a.media_type === "video" && (
+                      <span className="media-badge">
+                        <Play size={11} />
+                        {a.media_info.duration?.toFixed(1)}s
+                      </span>
+                    )}
+                    {a.presence !== "available" && (
+                      <span className="missing-badge">
+                        {labels[a.presence]}
+                      </span>
+                    )}
+                  </div>
+                  <div className="asset-caption">
+                    <span title={a.name}>{a.name}</span>
+                    <small className="asset-meta">
+                      {a.best && <b className="best-label">最佳</b>}
+                      {a.origin === "imported"
+                        ? "导入"
+                        : a.kind === "preparation"
+                          ? "准备画面"
+                          : a.kind === "intermediate"
+                            ? "中间"
+                            : "生成"}
+                      {a.media_info.width
+                        ? ` · ${a.media_info.width}×${a.media_info.height}`
+                        : ""}
+                    </small>
+                    {assetTags.length > 0 && (
+                      <span
+                        className="asset-tags"
+                        title={assetTags
+                          .map((tag: Data) => tag.name)
+                          .join("、")}
+                      >
+                        {assetTags.slice(0, 4).map((tag: Data) => (
+                          <i key={tag.id} style={{ background: tag.color }} />
+                        ))}
+                        {assetTags.length > 4 && (
+                          <em>+{assetTags.length - 4}</em>
+                        )}
+                      </span>
+                    )}
+                    {(libraryTab === "key" || curated) && (
+                      <button
+                        type="button"
+                        className="tag-edit"
+                        title="直接调整这份素材的标签"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setTagEditing(a);
+                        }}
+                      >
+                        <Tag size={11} />
+                        {assetTags.length ? "换标签" : "打标签"}
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div className="asset-caption">
-                  <span title={a.name}>{a.name}</span>
-                  <small>
-                    {a.media_info.width
-                      ? `${a.media_info.width} × ${a.media_info.height}`
-                      : bytes(a.byte_size)}
-                  </small>
-                </div>
-              </button>
-            ))}
+              );
+            })}
             {assets.isLoading && <LoaderCircle className="spin loader" />}
             {!allAssets.length && !assets.isLoading && (
               <div className="library-empty">
-                {search
-                  ? "没有匹配的素材"
-                  : trash
-                    ? "回收站为空"
-                    : "作品和导入素材将在这里积累"}
+                {search ? (
+                  "没有匹配的素材"
+                ) : trash ? (
+                  "回收站为空"
+                ) : libraryTab === "key" ? (
+                  <div className="key-empty">
+                    <span>把人物、场景、道具的关键图放进来</span>
+                    <small>选中素材后点亮星标，或直接从全部素材整理。</small>
+                    <div>
+                      <Button onClick={() => chooseTab("all")}>
+                        去全部素材挑选
+                      </Button>
+                      <Button
+                        disabled={!writable}
+                        onClick={() => keyFiles.current?.click()}
+                      >
+                        导入关键素材
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  "作品和导入素材将在这里积累"
+                )}
               </div>
             )}
           </div>
@@ -957,45 +1509,171 @@ export default function App() {
               </Button>
             </div>
           )}
-          <div className="library-footer">
-            <Button
-              disabled={!writable || !!busy}
-              onClick={() => files.current?.click()}
-            >
-              <Upload size={16} />
-              导入素材
-            </Button>
-            <Button
-              title="导入文件夹"
-              disabled={!writable || !!busy}
-              onClick={() => folders.current?.click()}
-            >
-              <FolderPlus size={16} />
-            </Button>
-            <Button
-              title="跨项目素材库"
-              disabled={!writable}
-              onClick={() => setModal("reuse")}
-            >
-              <Copy size={16} />
-            </Button>
-            {access.canManage && (
+          {!trash && (picking || picked.length > 0) && (
+            <div className="batch-bar">
+              <div className="batch-summary">
+                <strong>已选 {picked.length} 份</strong>
+                <span>{picking ? "点击卡片勾选" : "批量整理"}</span>
+              </div>
+              <div className="batch-actions">
+                <Button
+                  disabled={!picked.length || !writable}
+                  onClick={() => addPicked([])}
+                >
+                  加入关键
+                </Button>
+                <Button
+                  disabled={!picked.length || !writable}
+                  onClick={() => setTagPickerOpen(!tagPickerOpen)}
+                >
+                  打标签
+                </Button>
+                {libraryTab === "key" && (
+                  <Button
+                    disabled={!picked.length || !writable}
+                    onClick={removePicked}
+                  >
+                    移出
+                  </Button>
+                )}
+                <Button
+                  onClick={() => {
+                    setPicked([]);
+                    setPicking(false);
+                    setTagPickerOpen(false);
+                    setPendingTags([]);
+                  }}
+                >
+                  取消
+                </Button>
+              </div>
+              {tagPickerOpen && (
+                <div className="tag-picker">
+                  <span>选择标签（可多选）</span>
+                  <div className="tag-options">
+                    {tags.map((tag) => (
+                      <label key={tag.id}>
+                        <input
+                          type="checkbox"
+                          checked={pendingTags.includes(tag.id)}
+                          onChange={(e) =>
+                            setPendingTags(
+                              e.target.checked
+                                ? [...pendingTags, tag.id]
+                                : pendingTags.filter((id) => id !== tag.id),
+                            )
+                          }
+                        />
+                        <i style={{ background: tag.color }} />
+                        {tag.name}
+                      </label>
+                    ))}
+                    {!tags.length && <small>还没有标签，先新建一个。</small>}
+                  </div>
+                  <div className="tag-picker-create">
+                    <input
+                      aria-label="新标签名称"
+                      value={newTagName}
+                      placeholder="新标签名称"
+                      onChange={(e) => setNewTagName(e.target.value)}
+                    />
+                    <Button
+                      disabled={!newTagName.trim() || !!busy}
+                      onClick={async () => {
+                        const tag = await createTag(newTagName.trim());
+                        if (tag) {
+                          setPendingTags([...pendingTags, tag.id]);
+                          setNewTagName("");
+                        }
+                      }}
+                    >
+                      新建
+                    </Button>
+                  </div>
+                  <div className="tag-picker-actions">
+                    <Button
+                      onClick={() => {
+                        setTagPickerOpen(false);
+                        setPendingTags([]);
+                      }}
+                    >
+                      取消
+                    </Button>
+                    <Button
+                      variant="primary"
+                      disabled={!picked.length || !writable}
+                      onClick={() => addPicked(pendingTags)}
+                    >
+                      加入并打标签
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {!trash && (
+            <div className="library-footer">
+              {libraryTab === "key" ? (
+                <Button
+                  disabled={!writable || !!busy}
+                  onClick={() => keyFiles.current?.click()}
+                >
+                  <Upload size={16} />
+                  导入关键素材
+                </Button>
+              ) : (
+                <>
+                  <Button
+                    disabled={!writable || !!busy}
+                    onClick={() => files.current?.click()}
+                  >
+                    <Upload size={16} />
+                    导入素材
+                  </Button>
+                  <Button
+                    title="导入文件夹"
+                    disabled={!writable || !!busy}
+                    onClick={() => folders.current?.click()}
+                  >
+                    <FolderPlus size={16} />
+                  </Button>
+                </>
+              )}
               <Button
-                title="导入ComfyUI既有产物"
+                title="跨项目素材库"
                 disabled={!writable}
-                onClick={() => setModal("comfy-output")}
+                onClick={() => setModal("reuse")}
               >
-                <ImagePlus size={16} />
+                <Copy size={16} />
               </Button>
-            )}
-          </div>
+              {access.canManage && (
+                <Button
+                  title="导入ComfyUI既有产物"
+                  disabled={!writable}
+                  onClick={() => setModal("comfy-output")}
+                >
+                  <ImagePlus size={16} />
+                </Button>
+              )}
+            </div>
+          )}
           <input
             ref={files}
             type="file"
             multiple
             hidden
             onChange={(e) => {
-              if (e.target.files) importFiles(e.target.files);
+              if (e.target.files) importFiles(e.target.files, "all");
+              e.target.value = "";
+            }}
+          />
+          <input
+            ref={keyFiles}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              if (e.target.files) importFiles(e.target.files, "key");
               e.target.value = "";
             }}
           />
@@ -1006,7 +1684,7 @@ export default function App() {
             hidden
             {...({ webkitdirectory: "" } as any)}
             onChange={(e) => {
-              if (e.target.files) importFiles(e.target.files);
+              if (e.target.files) importFiles(e.target.files, "all");
               e.target.value = "";
             }}
           />
@@ -1037,6 +1715,18 @@ export default function App() {
               )}
               {focus && (
                 <>
+                  <Button
+                    title={
+                      focus.project?.curated ? "移出关键素材" : "加入关键素材"
+                    }
+                    disabled={!writable}
+                    onClick={() => toggleKey(focus)}
+                  >
+                    <Star
+                      size={16}
+                      fill={focus.project?.curated ? "currentColor" : "none"}
+                    />
+                  </Button>
                   <Button title="素材详情" onClick={() => setModal("asset")}>
                     <SlidersHorizontal size={16} />
                   </Button>
@@ -1784,6 +2474,7 @@ export default function App() {
         <AssetDialog
           asset={focus}
           project={project!}
+          tags={tags}
           onClose={() => setModal(null)}
           action={action}
           onLineage={() => setModal("lineage")}
@@ -2269,6 +2960,7 @@ function ToolEditor({
 function AssetDialog({
   asset,
   project,
+  tags,
   onClose,
   action,
   onLineage,
@@ -2276,6 +2968,7 @@ function AssetDialog({
 }: {
   asset: Data;
   project: Data;
+  tags: Data[];
   onClose: () => void;
   action: Action;
   onLineage: () => void;
@@ -2286,7 +2979,10 @@ function AssetDialog({
     queryFn: () => api(`/assets/${asset.id}`),
   });
   const [note, setNote] = useState(asset.project?.note || ""),
-    [tags, setTags] = useState((asset.project?.tags || []).join("，")),
+    [tagIds, setTagIds] = useState<string[]>(
+      (asset.project?.tags || []).map((tag: Data) => tag.id),
+    ),
+    [newTag, setNewTag] = useState(""),
     [usage, setUsage] = useState(asset.project?.usage || "material");
   const [loadedRevision] = useState(asset.project?.revision);
   return (
@@ -2330,14 +3026,59 @@ function AssetDialog({
           placeholder="保留了什么、还想调整什么…"
         />
       </label>
-      <label>
-        标签
-        <input
-          value={tags}
-          onChange={(e) => setTags(e.target.value)}
-          placeholder="用逗号分隔"
-        />
-      </label>
+      <fieldset className="tag-field">
+        <legend>关键素材标签</legend>
+        <p className="muted">
+          勾选标签会把这份素材纳入本项目关键素材库；标签只属于当前项目。
+        </p>
+        <div className="tag-options">
+          {tags.map((tag) => (
+            <label key={tag.id}>
+              <input
+                type="checkbox"
+                checked={tagIds.includes(tag.id)}
+                onChange={(e) =>
+                  setTagIds(
+                    e.target.checked
+                      ? [...tagIds, tag.id]
+                      : tagIds.filter((id) => id !== tag.id),
+                  )
+                }
+              />
+              <i style={{ background: tag.color }} />
+              {tag.name}
+            </label>
+          ))}
+          {!tags.length && <small>还没有标签，可以在下面新建。</small>}
+        </div>
+        <div className="tag-picker-create">
+          <input
+            aria-label="新标签名称"
+            value={newTag}
+            placeholder="新建标签，如：人物/小雨"
+            onChange={(e) => setNewTag(e.target.value)}
+          />
+          <Button
+            disabled={!newTag.trim()}
+            onClick={async () => {
+              const created = (await action(
+                "tag",
+                () =>
+                  api(`/projects/${project.id}/tags`, "POST", {
+                    name: newTag.trim(),
+                  }),
+                "标签已创建",
+              )) as Data | undefined;
+              if (created) {
+                setTagIds([...tagIds, created.id]);
+                setNewTag("");
+              }
+            }}
+          >
+            新建
+          </Button>
+        </div>
+      </fieldset>
       {detail.data?.execution && (
         <Button onClick={() => onSourceTask(detail.data!.execution.task_id)}>
           <Layers3 size={14} />
@@ -2364,6 +3105,29 @@ function AssetDialog({
         </details>
       )}
       <div className="modal-actions">
+        <Button
+          disabled={!!project.archived_at || !!asset.project?.removed_at}
+          onClick={() =>
+            action(
+              asset.project?.curated ? "unkey" : "key",
+              () =>
+                api(
+                  asset.project?.curated
+                    ? `/projects/${project.id}/key-assets/remove`
+                    : `/projects/${project.id}/key-assets`,
+                  "POST",
+                  { asset_ids: [asset.id] },
+                ),
+              asset.project?.curated ? "已移出关键素材" : "已加入关键素材",
+            )
+          }
+        >
+          <Star
+            size={15}
+            fill={asset.project?.curated ? "currentColor" : "none"}
+          />
+          {asset.project?.curated ? "移出关键素材" : "加入关键素材"}
+        </Button>
         <Button onClick={onLineage}>
           <GitBranch size={15} />
           来源关系
@@ -2403,21 +3167,157 @@ function AssetDialog({
             action("note", async () => {
               await api(`/projects/${project.id}/assets/${asset.id}`, "PATCH", {
                 note,
-                tags: tags
-                  .split(/[,，]/)
-                  .map((s: string) => s.trim())
-                  .filter(Boolean),
                 usage,
                 revision: loadedRevision,
               });
+              await api(
+                `/projects/${project.id}/assets/${asset.id}/tags`,
+                "PUT",
+                { tag_ids: tagIds },
+              );
               onClose();
             })
           }
         >
-          保存备注
+          保存备注与标签
         </Button>
       </div>
     </Modal>
+  );
+}
+
+function TagManager({
+  tags,
+  busy,
+  onCreate,
+  onRename,
+  onColor,
+  onDelete,
+  onClose,
+}: {
+  tags: Data[];
+  busy: boolean;
+  onCreate: (name: string) => void;
+  onRename: (id: string, name: string) => void;
+  onColor: (id: string, color: string) => void;
+  onDelete: (id: string) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState("");
+  return (
+    <div className="tag-manager">
+      <div className="tag-manager-head">
+        <strong>标签管理</strong>
+        <Button aria-label="关闭标签管理" onClick={onClose}>
+          <X size={13} />
+        </Button>
+      </div>
+      <div className="tag-manager-list">
+        {tags.map((tag) => (
+          <TagRow
+            key={`${tag.id}:${tag.name}:${tag.color}`}
+            tag={tag}
+            busy={busy}
+            onRename={onRename}
+            onColor={onColor}
+            onDelete={onDelete}
+          />
+        ))}
+        {!tags.length && <small>还没有标签，先建一个人物或场景。</small>}
+      </div>
+      <form
+        className="tag-manager-create"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!name.trim() || busy) return;
+          onCreate(name.trim());
+          setName("");
+        }}
+      >
+        <input
+          aria-label="新标签名称"
+          placeholder="新标签，如：人物/小雨"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <Button type="submit" disabled={!name.trim() || busy}>
+          <Plus size={13} />
+          新建
+        </Button>
+      </form>
+      <small className="tag-manager-hint">
+        拖一张素材到标签上即可放入；删除标签不会删除素材。
+      </small>
+    </div>
+  );
+}
+
+function TagRow({
+  tag,
+  busy,
+  onRename,
+  onColor,
+  onDelete,
+}: {
+  tag: Data;
+  busy: boolean;
+  onRename: (id: string, name: string) => void;
+  onColor: (id: string, color: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [name, setName] = useState(tag.name);
+  const [color, setColor] = useState(tag.color);
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <div className="tag-row">
+      <input
+        className="tag-color"
+        type="color"
+        aria-label={`${tag.name}的颜色`}
+        value={color}
+        disabled={busy}
+        onChange={(e) => setColor(e.target.value)}
+        onBlur={() => {
+          if (color !== tag.color) onColor(tag.id, color);
+        }}
+      />
+      <input
+        className="tag-name-input"
+        aria-label={`${tag.name}的名称`}
+        value={name}
+        disabled={busy}
+        onChange={(e) => setName(e.target.value)}
+        onBlur={() => {
+          const value = name.trim();
+          if (value && value !== tag.name) onRename(tag.id, value);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        }}
+      />
+      <span title={`${tag.count} 份关键素材`}>{tag.count}</span>
+      {confirming ? (
+        <span className="tag-row-confirm">
+          <Button
+            variant="danger"
+            disabled={busy}
+            onClick={() => onDelete(tag.id)}
+          >
+            删除
+          </Button>
+          <Button onClick={() => setConfirming(false)}>取消</Button>
+        </span>
+      ) : (
+        <Button
+          title="删除标签"
+          aria-label={`删除标签 ${tag.name}`}
+          disabled={busy}
+          onClick={() => setConfirming(true)}
+        >
+          <Trash2 size={13} />
+        </Button>
+      )}
+    </div>
   );
 }
 
