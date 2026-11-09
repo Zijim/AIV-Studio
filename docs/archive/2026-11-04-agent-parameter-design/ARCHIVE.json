@@ -1,0 +1,35 @@
+{
+  "status": "archived_unimplemented",
+  "archived_on": "2026-11-04",
+  "timezone": "Asia/Shanghai",
+  "spec_version": "0.3",
+  "reason": "User is prioritizing a separately designed agent architecture; keep this workflow-era proposal and review as future reference.",
+  "source_files": [
+    {
+      "source": "AGENT_PARAMETER_OPTIMIZATION_SPEC.md",
+      "source_sha256": "85f7f95ff3b5fc285399dcb301df1cc4f54ba34ef723c4a996ece4000ee5248e",
+      "snapshot": "SPEC_v0.3.md",
+      "snapshot_sha256": "3fbc4367e95211ff2cba9f02be582f42ebea66efb1ae3bedf7cc12d34110d17a",
+      "transform": "archive notice and relocated relative links only"
+    },
+    {
+      "source": "docs/工作流参数用途对照表.md",
+      "source_sha256": "51502c334f41b41ef1f1bcb23ab9f49f5d5f8d89956f3b967339fb0c8632cd8f",
+      "snapshot": "PARAMETER_REFERENCE.md",
+      "snapshot_sha256": "f3e6faa56f2250d18497769ae01eb54c13b5c8a126e16ddd942e224f90c6f1e3",
+      "transform": "archive notice and relocated relative links only"
+    }
+  ],
+  "scope": "Design documents and parameter reference; not a repository, model, or runtime environment backup.",
+  "supplemental_files": [
+    {
+      "path": "README.md",
+      "sha256": "d7bd89f599e44325f412343352c70a816deddf892ca54862042e378dbbf238d6"
+    },
+    {
+      "path": "REVIEW_NOTES.md",
+      "sha256": "0f18d7313dbba200cbb0ec9d5f955126214961614d19b99814bda400d2e5e696"
+    }
+  ],
+  "entry_point": "AGENT_PARAMETER_OPTIMIZATION_SPEC.md"
+}
