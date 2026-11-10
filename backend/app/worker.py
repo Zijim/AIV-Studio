@@ -10,6 +10,8 @@ from sqlalchemy import delete, func, select
 
 from .comfy import file_references
 from .conversations import touch_conversation
+from .creative_agent_policy import reconcile_execution_slots
+from .creative_agent_scope import require_submission_inputs
 from .errors import AppError
 from .goal_tracking import finish_video_step
 from .models import (
@@ -121,12 +123,16 @@ class Worker:
         for execution in unfinished:
             self.spawn(self.collect(execution.id))
         async with self.db.session() as session:
-            active = (await session.scalars(select(Task).where(Task.state.in_(("queued", "running", "saving"))))).all()
+            active = (await session.scalars(select(Task).where(
+                Task.state.in_(("queued", "running", "saving")) |
+                (Task.agent_run_id.is_not(None) & Task.state.in_(("failed", "cancelled", "needs_attention")))
+            ))).all()
         for task in active:
             await self.aggregate(task.id)
 
-    async def run(self):
-        await self.recover()
+    async def run(self, *, recover=True):
+        if recover:
+            await self.recover()
         while not self.stopping:
             try:
                 await self.health()
@@ -208,12 +214,16 @@ class Worker:
         socket = None
         try:
             self.storage.check_space()
+            async with self.db.session() as session:
+                await require_submission_inputs(session, task, execution)
             tool = self.registry.get(execution.tool_id, execution.tool_version)
             if tool["availability"] != "available" or tool["template_hash"] != execution.configuration["template_hash"]:
                 raise AppError("tool_changed", "确认后的工具版本、节点或模型已不可用，请查看诊断信息。")
             await self.update(execution_id, execution_state="preparing", progress={"stage": "准备输入素材"})
             uploads = {}
             for item in execution.inputs:
+                async with self.db.session() as session:
+                    await require_submission_inputs(session, task, execution)
                 asset, blob, path = await self.storage.blob_path(item["asset_id"])
                 if blob.sha256 != item["blob_id"] or await asyncio.to_thread(file_hash, path) != blob.sha256:
                     raise AppError("input_integrity", "输入素材内容已改变，已停止提交。")
@@ -239,8 +249,10 @@ class Worker:
                     await socket.close()
                     await session.flush()
                     return
+                await require_submission_inputs(session, parent, current)
                 current.submitted_payload = payload
                 current.execution_state = "submitting"
+                await reconcile_execution_slots(session, parent, [current])
             try:
                 await self.comfy.submit(payload)
                 await self.update(execution_id, execution_state="queued", progress={"stage": "已提交ComfyUI"})
@@ -286,7 +298,7 @@ class Worker:
                 return
             await self.update(
                 execution_id,
-                execution_state="failed",
+                execution_state="cancelled" if getattr(exc, "code", None) == "run_cancelled" else "failed",
                 error={
                     "code": getattr(exc, "code", "preparation_failed"),
                     "message": getattr(exc, "message", "输入准备或连接失败"),
@@ -693,6 +705,7 @@ class Worker:
                         execution.execution_state = "cancelled"
                         execution.finished_at = now()
             all_terminal = all(e.execution_state in TERMINAL for e in executions)
+            await reconcile_execution_slots(session, task, executions)
             if all_terminal:
                 if any(
                     e.execution_state in ("unknown", "interrupted")
@@ -723,6 +736,11 @@ class Worker:
             if previous != state:
                 record_event(session, "task.updated", task.project_id, task_id, state=state)
                 if all_terminal or waiting_storage:
+                    if task.agent_run_id:
+                        # One production task finishing is an observation for the
+                        # autonomous Run, not completion or a request for feedback.
+                        record_event(session, "agent.updated", task.project_id, task.agent_run_id)
+                        return
                     if task.turn_id:
                         turn = await session.get(AgentTurn, task.turn_id)
                         turn.state = "completed" if state == "completed" else "failed"

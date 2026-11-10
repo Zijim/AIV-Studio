@@ -16,6 +16,8 @@ from .api import router
 from .comfy import ComfyClient
 from .config import ROOT, load_settings
 from .conversation_api import router as conversation_router
+from .creative_agent import CreativeAgent
+from .creative_agent_api import router as creative_agent_router
 from .db import Database
 from .errors import AppError
 from .extensions import router as extension_router
@@ -95,10 +97,19 @@ async def lifespan(app):
     state.worker = Worker(db, state.comfy, state.registry, state.storage, settings)
     state.maintenance = MaintenanceService(db, settings, state.storage)
     await state.maintenance.recover()
-    worker = asyncio.create_task(state.worker.run())
+    # Storage receipts and task identities must be reconciled before the Agent
+    # can decide whether to continue any interrupted creation.
+    await state.worker.recover()
+    state.creative_agent = CreativeAgent(state)
+    worker = asyncio.create_task(state.worker.run(recover=False))
+    agent = asyncio.create_task(state.creative_agent.serve())
     try:
         yield
     finally:
+        await state.creative_agent.stop()
+        agent.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await agent
         await state.worker.stop()
         worker.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -115,6 +126,7 @@ async def lifespan(app):
 app = FastAPI(title="映作 · AIV Studio", version="0.1.0", lifespan=lifespan)
 app.include_router(router)
 app.include_router(conversation_router)
+app.include_router(creative_agent_router)
 app.include_router(extension_router)
 
 

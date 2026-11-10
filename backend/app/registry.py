@@ -114,8 +114,8 @@ class Registry:
             raise AppError("resource_limit", "实际视频帧数超过资源上限。")
         return dict(width=width, height=height, resolved_frames=frames, resolved_seconds=frames / 24)
 
-    def normalize(self, tool_id, values, assets, settings, count=1):
-        tool = self.get(tool_id)
+    def normalize(self, tool_id, values, assets, settings, count=1, *, version=None):
+        tool = self.get(tool_id, version)
         if tool_id == "image.generate.qwen" and values.get("preset") == "quality":
             values = {"width": 1328, "height": 1328, **values}
         try:

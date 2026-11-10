@@ -22,6 +22,7 @@ export function ConversationSwitcher({
   onChoose,
   onRefresh,
   onError,
+  mode = "assisted",
 }: {
   projectId: string;
   items: Data[];
@@ -31,6 +32,7 @@ export function ConversationSwitcher({
   onChoose: (conversation: Data) => void;
   onRefresh: () => void;
   onError: (message: string) => void;
+  mode?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -74,7 +76,7 @@ export function ConversationSwitcher({
       const conversation = await api(
         `/projects/${projectId}/conversations`,
         "POST",
-        { idempotency_key: crypto.randomUUID() },
+        { idempotency_key: crypto.randomUUID(), mode },
       );
       onChoose(conversation);
       setOpen(false);
@@ -165,9 +167,17 @@ export function ConversationSwitcher({
           </Button>
         </div>
         <div className="conversation-scope">
-          <span>项目素材共享 · 对话记忆独立</span>
+          <span>
+            {mode === "autonomous"
+              ? "指定素材与关键素材 · 自主执行"
+              : "项目素材共享 · 对话记忆独立"}
+          </span>
           <span
-            title={`每个对话独立使用 ${inputLimit}K 输入预算，达到 ${threshold}K 自动整理较早记录。原始消息保留；每日费用预算共用。${current?.summarized_message_count ? ` 已整理 ${current.summarized_message_count} 条早期消息。` : ""}`}
+            title={
+              mode === "autonomous"
+                ? "自主创作保留目标与执行事实，按需整理工具记录。"
+                : `每个对话独立使用 ${inputLimit}K 输入预算，达到 ${threshold}K 自动整理较早记录。原始消息保留；每日费用预算共用。${current?.summarized_message_count ? ` 已整理 ${current.summarized_message_count} 条早期消息。` : ""}`
+            }
           >
             {inputLimit}K 上下文
           </span>
@@ -264,7 +274,11 @@ export function ConversationSwitcher({
                       }
                       aria-label={`${item.archived_at ? "恢复" : "归档"} ${item.title}`}
                       disabled={
-                        !writable || !!busy || item.planning || item.running
+                        !writable ||
+                        !!busy ||
+                        item.planning ||
+                        item.running ||
+                        !!item.agent_run
                       }
                       onClick={() => archive(item, !item.archived_at)}
                     >

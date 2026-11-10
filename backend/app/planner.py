@@ -417,6 +417,10 @@ class Planner:
         return context
 
     async def prepare(self, project_id, request, on_start=None):
+        async with self.db.session() as s:
+            conversation = await resolve_conversation(s, project_id, request.conversation_id, writable=True)
+            if conversation.mode != "assisted":
+                raise AppError("conversation_mode", "自主创作请使用 Agent 入口；运行中仅支持必要澄清回答。", 409)
         lock = self.locks.setdefault(request.conversation_id or default_conversation_id(project_id), asyncio.Lock())
         if lock.locked():
             raise AppError("planner_busy", "当前对话正在准备方案。", 409)

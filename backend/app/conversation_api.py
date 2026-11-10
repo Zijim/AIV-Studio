@@ -4,8 +4,20 @@ from fastapi import APIRouter, Request
 from sqlalchemy import func, select
 
 from .conversations import memory_key, resolve_conversation
+from .creative_agent_scope import TERMINAL_RUNS, protect_active
 from .errors import AppError
-from .models import AgentTurn, Conversation, Idempotency, Message, Setting, Task, now, record_event, row_dict
+from .models import (
+    AgentTurn,
+    Conversation,
+    CreativeAgentRun,
+    Idempotency,
+    Message,
+    Setting,
+    Task,
+    now,
+    record_event,
+    row_dict,
+)
 from .plans import ACTIVE_TASKS, digest, require_project
 from .schemas import ConversationArchive, ConversationCreate, ConversationRename
 
@@ -46,6 +58,8 @@ async def conversations(request: Request, project_id: str):
         active_tasks = (
             await session.scalars(select(Task).where(Task.project_id == project_id, Task.state.in_(ACTIVE_TASKS)))
         ).all()
+        active_runs = (await session.scalars(select(CreativeAgentRun).where(
+            CreativeAgentRun.project_id == project_id, CreativeAgentRun.state.not_in(TERMINAL_RUNS)))).all()
         memories = {
             item.key: item.value
             for item in (
@@ -62,6 +76,7 @@ async def conversations(request: Request, project_id: str):
                 "message_count": count,
                 "planning": any(t.conversation_id == c.id and t.state == "planning" for t in active_turns),
                 "running": any(t.conversation_id == c.id for t in active_tasks),
+                "agent_run": next(({"id": r.id, "state": r.state} for r in active_runs if r.conversation_id == c.id), None),
                 "summarized_message_count": memories.get(memory_key(c.id), {}).get("message_count", 0),
             }
             for c, preview, count, last_time in rows
@@ -83,7 +98,7 @@ async def create_conversation(request: Request, project_id: str, body: Conversat
     title = body.title.strip() if body.title is not None else "新对话"
     if not title:
         raise AppError("conversation_title", "对话名称不能为空。")
-    hashed = digest({"project_id": project_id, "title": body.title})
+    hashed = digest({"project_id": project_id, "title": body.title, "mode": body.mode})
     async with request.app.state.db.transaction() as session:
         await require_project(session, project_id, writable=True)
         if body.idempotency_key:
@@ -92,7 +107,7 @@ async def create_conversation(request: Request, project_id: str, body: Conversat
                 if old.scope != "conversation_create" or old.payload_hash != hashed:
                     raise AppError("idempotency_conflict", "新建对话的提交标识冲突。", 409)
                 return old.result
-        conversation = Conversation(project_id=project_id, title=title, auto_title=body.title is None)
+        conversation = Conversation(project_id=project_id, title=title, mode=body.mode, auto_title=body.title is None)
         session.add(conversation)
         await session.flush()
         result = row_dict(conversation)
@@ -129,6 +144,7 @@ async def archive_conversation(request: Request, project_id: str, conversation_i
         if conversation.revision != body.revision:
             raise AppError("revision_conflict", "对话已更新，请刷新后重试。", 409)
         if body.archived:
+            await protect_active(session, conversation_id=conversation.id)
             planning = await session.scalar(
                 select(AgentTurn.id)
                 .where(AgentTurn.conversation_id == conversation.id, AgentTurn.state.in_(("planning", "executing")))

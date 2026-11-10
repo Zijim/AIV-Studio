@@ -63,8 +63,12 @@ class PlanService:
         conversation_id=None,
         prompt_metadata=None,
         prompt_mode=None,
+        agent_run_id=None,
+        agent_call_id=None,
+        control_version=None,
+        tool_version=None,
     ):
-        tool = self.registry.get(request.tool_id)
+        tool = self.registry.get(request.tool_id, tool_version)
         # Derived values are recomputed, never trusted when a plan is edited.
         values = dict(request.parameters)
         derived = {
@@ -74,6 +78,19 @@ class PlanService:
         for key in (*derived.get(tool["id"], ()), *computed):
             values.pop(key, None)
         async with self.db.transaction() as session:
+            if agent_run_id:
+                from .creative_agent_scope import require_running, scoped_asset
+                from .models import CreativeAgentCall
+                run = await require_running(session, agent_run_id, control_version)
+                call = await session.get(CreativeAgentCall, agent_call_id)
+                if not call or call.run_id != run.id or run.project_id != project_id:
+                    raise AppError("agent_owner", "创作调用归属不一致。", 409)
+                if call.plan_id:
+                    existing = await session.get(Plan, (call.plan_id, 1))
+                    if existing:
+                        return row_dict(existing)
+                for ref in request.inputs:
+                    await scoped_asset(session, run, ref.asset_id)
             project = await require_project(session, project_id, writable=True)
             latest = None
             if plan_id:
@@ -90,6 +107,8 @@ class PlanService:
                 conversation_id or request.conversation_id or (latest.conversation_id if latest else None),
                 writable=True,
             )
+            if conversation.mode == "autonomous" and not agent_run_id:
+                raise AppError("agent_owner", "自主创作方案必须由所属 Run 创建。", 409)
             if latest and latest.conversation_id != conversation.id:
                 raise AppError("conversation_mismatch", "方案不能转移到其他对话。", 409)
             if turn_id:
@@ -116,7 +135,7 @@ class PlanService:
                 asset, blob, _ = await self.storage.blob_path(item["asset_id"], session)
                 assets[item["slot"]] = row_dict(asset)
             params, seeds, dimensions = self.registry.normalize(
-                tool["id"], values, assets, self.settings, request.candidate_count
+                tool["id"], values, assets, self.settings, request.candidate_count, version=tool["version"]
             )
             if prompt_metadata is None and latest and latest.prompt_metadata:
                 if latest.prompt_metadata.get("continuation"):
@@ -220,8 +239,11 @@ class PlanService:
                 project_revision=context_revision,
                 plan_hash=digest(snapshot),
                 origin=origin,
+                agent_run_id=agent_run_id,
             )
             session.add(plan)
+            if agent_run_id:
+                call.plan_id = plan.id
             if turn_id:
                 turn = await session.get(AgentTurn, turn_id)
                 turn.state = "awaiting_execution"
@@ -232,7 +254,7 @@ class PlanService:
             result.update(dimensions=dimensions, tool_name=tool["name"], tool_subtitle=tool["subtitle"])
             return result
 
-    async def execute(self, plan_id, request, retry_of=None):
+    async def execute(self, plan_id, request, retry_of=None, *, agent_call_id=None, control_version=None):
         payload_hash = digest(
             dict(
                 plan_id=plan_id,
@@ -255,6 +277,18 @@ class PlanService:
                 raise AppError("plan_changed", "方案已改变或执行，请刷新确认。", 409)
             project = await require_project(session, plan.project_id, writable=True)
             conversation = await resolve_conversation(session, plan.project_id, plan.conversation_id, writable=True)
+            if plan.agent_run_id:
+                from .creative_agent_policy import reserve_execution
+                from .creative_agent_scope import require_running, scoped_asset
+                from .models import CreativeAgentCall
+                run = await require_running(session, plan.agent_run_id, control_version)
+                call = await session.get(CreativeAgentCall, agent_call_id) if agent_call_id else None
+                if not call or call.run_id != run.id or call.plan_id != plan.id:
+                    raise AppError("agent_owner", "自主创作方案仅能由所属 Run 提交。", 409)
+                for ref in plan.inputs:
+                    await scoped_asset(session, run, ref["asset_id"])
+            elif conversation.mode == "autonomous":
+                raise AppError("agent_owner", "自主创作对话请通过 Agent 发起创作。", 409)
             planning = await session.scalar(
                 select(AgentTurn)
                 .where(AgentTurn.conversation_id == conversation.id, AgentTurn.state == "planning")
@@ -303,10 +337,14 @@ class PlanService:
                 plan_revision=plan.revision,
                 turn_id=plan.turn_id,
                 origin=plan.origin,
+                agent_run_id=plan.agent_run_id,
+                agent_call_id=agent_call_id if plan.agent_run_id else None,
                 queue_seq=seq + 1,
                 candidate_count=plan.candidate_count,
                 retry_of_task_id=retry_of,
             )
+            if plan.agent_run_id:
+                await reserve_execution(session, run, call, plan.candidate_count)
             if plan.origin == "retry" and plan.based_on_execution_id:
                 source = await session.get(Execution, plan.based_on_execution_id)
                 task.retry_of_task_id = source.task_id
@@ -332,6 +370,7 @@ class PlanService:
                         seed=seed,
                         parameters={**plan.parameters, "seed": seed},
                         inputs=inputs,
+                        agent_quota_state="reserved" if plan.agent_run_id else None,
                         configuration={
                             "comfy_url": self.settings.comfy_url,
                             "timeout_seconds": self.settings.video_timeout_seconds

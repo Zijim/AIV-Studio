@@ -21,6 +21,7 @@ class ProjectUpdate(StrictModel):
 
 
 class ConversationCreate(StrictModel):
+    mode: Literal["assisted", "autonomous"] = "assisted"
     title: str | None = Field(default=None, min_length=1, max_length=120)
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
 

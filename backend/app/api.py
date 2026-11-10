@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 
 from .config import ROOT
 from .conversations import resolve_conversation
+from .creative_agent_scope import protect_active
 from .errors import AppError
 from .media_delivery import file_etag, media_response, small_preview
 from .models import (
@@ -347,6 +348,8 @@ async def edit_project(request: Request, project_id: str, body: ProjectUpdate):
 async def archive_project(request: Request, project_id: str, archived: bool = Body(default=True, embed=True)):
     async with svc(request).db.transaction() as s:
         p = await require_project(s, project_id)
+        if archived:
+            await protect_active(s, project_id=project_id)
         active = await s.scalar(
             select(Task).where(Task.project_id == project_id, Task.state.in_(ACTIVE_TASKS)).limit(1)
         )
@@ -362,6 +365,7 @@ async def archive_project(request: Request, project_id: str, archived: bool = Bo
 async def remove_project(request: Request, project_id: str):
     async with svc(request).db.transaction() as s:
         p = await require_project(s, project_id)
+        await protect_active(s, project_id=project_id)
         active = await s.scalar(
             select(Task).where(Task.project_id == project_id, Task.state.in_(ACTIVE_TASKS)).limit(1)
         )
@@ -606,6 +610,7 @@ async def edit_note(request: Request, project_id: str, asset_id: str, body: Asse
 async def unlink_asset(request: Request, project_id: str, asset_id: str):
     async with svc(request).db.transaction() as s:
         await require_project(s, project_id, writable=True)
+        await protect_active(s, project_id=project_id, asset_id=asset_id)
         m = await s.get(ProjectAsset, (project_id, asset_id))
         if not m:
             raise AppError("asset_not_found", "项目素材不存在。", 404)

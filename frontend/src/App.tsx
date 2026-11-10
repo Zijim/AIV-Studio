@@ -69,6 +69,7 @@ import {
 } from "./lib";
 import { Button, Empty, Modal } from "./components/ui";
 import { ConversationSwitcher } from "./components/ConversationSwitcher";
+import { AutonomousAssistant } from "./components/AutonomousAssistant";
 import { ProgressiveImage } from "./components/ProgressiveImage";
 import { TaskQueue, TaskAssetPreview } from "./components/TaskQueue";
 import {
@@ -279,6 +280,13 @@ export default function App() {
     (c) => c.id === store.conversationId,
   );
   const cid = conversation?.id as string | undefined;
+  const assistantMode = conversation?.mode ?? "assisted";
+  const manualConversationId =
+    assistantMode === "autonomous"
+      ? conversationItems.find(
+          (c) => c.is_default && (c.mode ?? "assisted") === "assisted",
+        )?.id
+      : cid;
   const message = cid ? (store.messageDrafts[cid] ?? "") : "";
   function setMessage(value: string) {
     if (cid) store.setMessageDraft(cid, value);
@@ -382,10 +390,31 @@ export default function App() {
           : [value, ...(old?.items ?? [])],
       }),
     );
-    store.chooseConversation(value.id);
+    store.chooseConversation(value.id, value.mode ?? "assisted");
     setEditingPlan(null);
     setModal(null);
     navigate(`/projects/${store.projectId}?conversation=${value.id}`);
+  }
+
+  async function switchAssistantMode(mode: string) {
+    if (mode === assistantMode) return;
+    const remembered =
+      store.conversationsByMode?.[`${store.projectId}:${mode}`];
+    const target =
+      conversationItems.find((c) => c.id === remembered && c.mode === mode) ??
+      conversationItems.find(
+        (c) => (c.mode ?? "assisted") === mode && !c.archived_at,
+      );
+    if (target) chooseConversation(target);
+    else
+      await action("assistant-mode", async () => {
+        const value = await api(
+          `/projects/${store.projectId}/conversations`,
+          "POST",
+          { mode, idempotency_key: crypto.randomUUID() },
+        );
+        chooseConversation(value);
+      });
   }
 
   function refresh() {
@@ -428,7 +457,8 @@ export default function App() {
       conversationItems.find((c) => !c.archived_at) ??
       conversationItems[0];
     if (!value) return;
-    if (store.conversationId !== value.id) store.chooseConversation(value.id);
+    if (store.conversationId !== value.id)
+      store.chooseConversation(value.id, value.mode ?? "assisted");
     if (requested !== value.id) {
       const params = new URLSearchParams(location.search);
       params.set("conversation", value.id);
@@ -501,7 +531,17 @@ export default function App() {
                 (p: Data) => p.project_id === update.project_id,
               );
               setFocus(asset);
-              useWorkspace.getState().chooseAsset(asset.id);
+              const currentWorkspace = useWorkspace.getState();
+              const owner = queryClient
+                .getQueryData<Data>([
+                  "conversations",
+                  currentWorkspace.projectId,
+                ])
+                ?.items?.find(
+                  (c: Data) => c.id === currentWorkspace.conversationId,
+                );
+              if (owner?.mode === "assisted")
+                currentWorkspace.chooseAsset(asset.id);
               setToast("新结果已归档");
             }
           })
@@ -513,19 +553,21 @@ export default function App() {
           ? ["plans", "conversations"]
           : type.startsWith("message.") || type.startsWith("turn.")
             ? ["messages", "plans", "turns", "conversations"]
-            : type.startsWith("conversation.")
-              ? ["conversations"]
-              : type.startsWith("project.")
-                ? ["projects", "assets", "library-facets"]
-                : type.startsWith("library.")
-                  ? ["assets", "library-facets", "detail"]
-                  : [
-                      "assets",
-                      "library-facets",
-                      "detail",
-                      "tasks",
-                      "task-detail",
-                    ];
+            : type.startsWith("agent.")
+              ? ["agent-runs", "agent-activity", "conversations", "messages"]
+              : type.startsWith("conversation.")
+                ? ["conversations"]
+                : type.startsWith("project.")
+                  ? ["projects", "assets", "library-facets"]
+                  : type.startsWith("library.")
+                    ? ["assets", "library-facets", "detail"]
+                    : [
+                        "assets",
+                        "library-facets",
+                        "detail",
+                        "tasks",
+                        "task-detail",
+                      ];
       keys.forEach((key) => queryClient.invalidateQueries({ queryKey: [key] }));
     };
     return () => source.close();
@@ -2111,12 +2153,56 @@ export default function App() {
               <span>DeepSeek V4.1 Flash</span>
             </div>
             <span className="assistant-status">
-              {busy === "message" || planningTurn ? "思考中" : "自动规划"}
+              {assistantMode === "autonomous"
+                ? "自主执行"
+                : busy === "message" || planningTurn
+                  ? "思考中"
+                  : "自动规划"}
             </span>
           </div>
+          <div
+            className="assistant-mode-tabs"
+            role="group"
+            aria-label="创作助手模式"
+          >
+            <button
+              aria-pressed={assistantMode === "assisted"}
+              disabled={busy === "assistant-mode"}
+              onClick={() => switchAssistantMode("assisted")}
+            >
+              辅助创作
+            </button>
+            <button
+              aria-pressed={assistantMode === "autonomous"}
+              disabled={busy === "assistant-mode"}
+              onClick={() => switchAssistantMode("autonomous")}
+            >
+              自主创作
+            </button>
+          </div>
+          {conversationItems
+            .filter((c) => c.agent_run && c.id !== cid)
+            .map((c) => (
+              <button
+                key={c.id}
+                className="agent-return"
+                onClick={() => chooseConversation(c)}
+              >
+                {c.title} · Agent{" "}
+                {c.agent_run.state === "paused"
+                  ? "已暂停"
+                  : c.agent_run.state === "needs_attention"
+                    ? "需要处理"
+                    : "运行中"}{" "}
+                · 返回
+              </button>
+            ))}
           <ConversationSwitcher
             projectId={store.projectId}
-            items={conversationItems}
+            items={conversationItems.filter(
+              (c) => (c.mode ?? "assisted") === assistantMode,
+            )}
+            mode={assistantMode}
             current={conversation}
             limits={conversations.data?.context_limits}
             writable={writable}
@@ -2124,417 +2210,459 @@ export default function App() {
             onRefresh={refresh}
             onError={setToast}
           />
-          <div className="conversation">
-            {(conversations.isError || messages.isError) && (
-              <Empty icon={<MessageSquare />} title="对话暂时无法加载">
-                <Button
-                  onClick={() => {
-                    conversations.refetch();
-                    messages.refetch();
-                  }}
-                >
-                  重新加载
-                </Button>
-              </Empty>
-            )}
-            {messages.hasNextPage && (
-              <Button
-                className="load-earlier-messages"
-                disabled={messages.isFetchingNextPage}
-                onClick={() => messages.fetchNextPage()}
-              >
-                {messages.isFetchingNextPage ? "正在加载…" : "加载更早的消息"}
-              </Button>
-            )}
-            {conversation && !chatMessages.length && !messages.isPending && (
-              <div className="assistant-intro">
-                <span className="eyebrow">一起把想法往前推进</span>
-                <h3>我会为你准备创作方案。</h3>
-                <p>
-                  这是一个独立的对话。告诉我你想要的画面、风格，或选择项目素材继续打磨；其他对话的聊天记录不会带入。
-                </p>
-                <div className="suggestions">
-                  {[
-                    "生成一组电影感的自然风景",
-                    "把选中的图片改成暖色调",
-                    "让这张图片动起来",
-                  ].map((text) => (
-                    <button
-                      key={text}
-                      disabled={!conversationWritable}
-                      onClick={() => setMessage(text)}
+          {assistantMode === "autonomous" && cid ? (
+            <AutonomousAssistant
+              key={cid}
+              projectId={store.projectId}
+              conversationId={cid}
+              writable={conversationWritable}
+              configured={!!health.data?.planner.configured}
+              selected={selected}
+              messages={chatMessages}
+              onError={setToast}
+              onOpenAsset={(id) => {
+                action("open-agent-output", async () => {
+                  const asset = await api(`/assets/${id}`);
+                  const value = {
+                    ...asset,
+                    project: asset.projects?.find(
+                      (p: Data) => p.project_id === store.projectId,
+                    ),
+                  };
+                  setFocus(value);
+                  setLocatedAsset(value);
+                  setModal("preview");
+                });
+              }}
+            />
+          ) : (
+            <>
+              <div className="conversation">
+                {(conversations.isError || messages.isError) && (
+                  <Empty icon={<MessageSquare />} title="对话暂时无法加载">
+                    <Button
+                      onClick={() => {
+                        conversations.refetch();
+                        messages.refetch();
+                      }}
                     >
-                      {text}
-                      <ArrowUp size={13} />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {chatMessages.map((m) => (
-              <div key={m.id} className={`chat-message ${m.role}`}>
-                <span className="message-role">
-                  {m.role === "user"
-                    ? "你"
-                    : m.role === "assistant"
-                      ? "映作"
-                      : "任务记录"}{" "}
-                  <small>{clock(m.created_at)}</small>
-                </span>
-                <p>{m.content}</p>
-                {!!m.details?.vision_images?.length && (
-                  <div className="message-images">
-                    {m.details.vision_images.map((image: Data) => (
-                      <span
-                        key={image.asset_id}
-                        title={`素材 ${image.asset_id}`}
-                      >
-                        附图 {image.index} · {image.name} ·{" "}
-                        {imageRoles[image.purpose]}
-                        {image.frame === "first" && "（仅动画首帧）"}
-                      </span>
-                    ))}
-                  </div>
+                      重新加载
+                    </Button>
+                  </Empty>
                 )}
-                {!!m.details?.visual_observations?.length && (
-                  <details className="visual-observations">
-                    <summary>
-                      模型图片观察 · {m.details.visual_observations.length} 张
-                    </summary>
-                    {m.details.visual_observations.map((item: Data) => (
-                      <div key={item.asset_id}>
-                        <strong>
-                          {item.name} · {imageRoles[item.purpose]}
-                        </strong>
-                        <p>{item.observation}</p>
-                        {item.uncertainties && (
-                          <small>不确定之处：{item.uncertainties}</small>
-                        )}
-                        <small>
-                          本轮读图尺寸 {item.sent_width} × {item.sent_height}
-                        </small>
-                      </div>
-                    ))}
-                  </details>
-                )}
-              </div>
-            ))}
-            {(busy === "message" || planningTurn) && (
-              <div className="thinking">
-                <LoaderCircle className="spin" size={16} />
-                {planningTurn?.stage === "composing"
-                  ? "正在编写创作提示词…"
-                  : planningTurn?.stage === "validating"
-                    ? "正在检查方案…"
-                    : "正在理解需求、选择工具…"}
-                {planningTurn && (
+                {messages.hasNextPage && (
                   <Button
-                    disabled={!!busy}
-                    onClick={() =>
-                      action("abandon", () =>
-                        api(`/turns/${planningTurn.id}/abandon`, "POST"),
-                      )
-                    }
+                    className="load-earlier-messages"
+                    disabled={messages.isFetchingNextPage}
+                    onClick={() => messages.fetchNextPage()}
                   >
-                    放弃本轮
+                    {messages.isFetchingNextPage
+                      ? "正在加载…"
+                      : "加载更早的消息"}
                   </Button>
                 )}
-              </div>
-            )}
-            {draft && (
-              <div className="plan-card">
-                <div className="plan-heading">
-                  <span>
-                    <WandSparkles size={15} />
-                    {draft.prompt_metadata?.continuation
-                      ? "生成视频"
-                      : draft.tool_name}
-                  </span>
-                  <span>待确认 · v{draft.revision}</span>
-                </div>
-                <p>{draft.change_summary || "按以下参数执行一次创作。"}</p>
-                <CreativeSummary plan={draft} />
-                <div className="plan-specs">
-                  <span>{draft.candidate_count} 个候选</span>
-                  {(
-                    draft.prompt_metadata?.continuation?.parameters ??
-                    draft.parameters
-                  ).width && (
-                    <span>
-                      {
-                        (
-                          draft.prompt_metadata?.continuation?.parameters ??
-                          draft.parameters
-                        ).width
-                      }{" "}
-                      ×{" "}
-                      {
-                        (
-                          draft.prompt_metadata?.continuation?.parameters ??
-                          draft.parameters
-                        ).height
-                      }
-                    </span>
+                {conversation &&
+                  !chatMessages.length &&
+                  !messages.isPending && (
+                    <div className="assistant-intro">
+                      <span className="eyebrow">一起把想法往前推进</span>
+                      <h3>我会为你准备创作方案。</h3>
+                      <p>
+                        这是一个独立的对话。告诉我你想要的画面、风格，或选择项目素材继续打磨；其他对话的聊天记录不会带入。
+                      </p>
+                      <div className="suggestions">
+                        {[
+                          "生成一组电影感的自然风景",
+                          "把选中的图片改成暖色调",
+                          "让这张图片动起来",
+                        ].map((text) => (
+                          <button
+                            key={text}
+                            disabled={!conversationWritable}
+                            onClick={() => setMessage(text)}
+                          >
+                            {text}
+                            <ArrowUp size={13} />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   )}
-                  {(
-                    draft.prompt_metadata?.continuation?.parameters ??
-                    draft.parameters
-                  ).resolved_seconds && (
-                    <span>
+                {chatMessages.map((m) => (
+                  <div key={m.id} className={`chat-message ${m.role}`}>
+                    <span className="message-role">
+                      {m.role === "user"
+                        ? "你"
+                        : m.role === "assistant"
+                          ? "映作"
+                          : "任务记录"}{" "}
+                      <small>{clock(m.created_at)}</small>
+                    </span>
+                    <p>{m.content}</p>
+                    {!!m.details?.vision_images?.length && (
+                      <div className="message-images">
+                        {m.details.vision_images.map((image: Data) => (
+                          <span
+                            key={image.asset_id}
+                            title={`素材 ${image.asset_id}`}
+                          >
+                            附图 {image.index} · {image.name} ·{" "}
+                            {imageRoles[image.purpose]}
+                            {image.frame === "first" && "（仅动画首帧）"}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {!!m.details?.visual_observations?.length && (
+                      <details className="visual-observations">
+                        <summary>
+                          模型图片观察 · {m.details.visual_observations.length}{" "}
+                          张
+                        </summary>
+                        {m.details.visual_observations.map((item: Data) => (
+                          <div key={item.asset_id}>
+                            <strong>
+                              {item.name} · {imageRoles[item.purpose]}
+                            </strong>
+                            <p>{item.observation}</p>
+                            {item.uncertainties && (
+                              <small>不确定之处：{item.uncertainties}</small>
+                            )}
+                            <small>
+                              本轮读图尺寸 {item.sent_width} ×{" "}
+                              {item.sent_height}
+                            </small>
+                          </div>
+                        ))}
+                      </details>
+                    )}
+                  </div>
+                ))}
+                {(busy === "message" || planningTurn) && (
+                  <div className="thinking">
+                    <LoaderCircle className="spin" size={16} />
+                    {planningTurn?.stage === "composing"
+                      ? "正在编写创作提示词…"
+                      : planningTurn?.stage === "validating"
+                        ? "正在检查方案…"
+                        : "正在理解需求、选择工具…"}
+                    {planningTurn && (
+                      <Button
+                        disabled={!!busy}
+                        onClick={() =>
+                          action("abandon", () =>
+                            api(`/turns/${planningTurn.id}/abandon`, "POST"),
+                          )
+                        }
+                      >
+                        放弃本轮
+                      </Button>
+                    )}
+                  </div>
+                )}
+                {draft && (
+                  <div className="plan-card">
+                    <div className="plan-heading">
+                      <span>
+                        <WandSparkles size={15} />
+                        {draft.prompt_metadata?.continuation
+                          ? "生成视频"
+                          : draft.tool_name}
+                      </span>
+                      <span>待确认 · v{draft.revision}</span>
+                    </div>
+                    <p>{draft.change_summary || "按以下参数执行一次创作。"}</p>
+                    <CreativeSummary plan={draft} />
+                    <div className="plan-specs">
+                      <span>{draft.candidate_count} 个候选</span>
                       {(
                         draft.prompt_metadata?.continuation?.parameters ??
                         draft.parameters
-                      ).resolved_seconds.toFixed(2)}{" "}
-                      秒 ·{" "}
-                      {
-                        (
-                          draft.prompt_metadata?.continuation?.parameters ??
-                          draft.parameters
-                        ).resolved_frames
-                      }{" "}
-                      帧
-                    </span>
-                  )}
-                </div>
-                <PlanInputs plan={draft} tools={tools.data ?? []} />
-                <PromptDetails
-                  key={`${draft.id}-${draft.revision}`}
-                  plan={draft}
-                  onError={setToast}
-                />
-                <div className="plan-actions">
-                  <Button
-                    title="按专用指引重新编写，保留执行参数"
-                    disabled={
-                      !conversationWritable ||
-                      !!busy ||
-                      !!planningTurn ||
-                      !!conversationRunning.length ||
-                      !tools.data?.find((t) => t.id === draft.tool_id)
-                        ?.assistant_guidance?.available ||
-                      draft.tool_id === "image.upscale.seedvr2"
-                    }
-                    onClick={() => rewritePrompt(draft)}
-                  >
-                    <RefreshCw size={14} />
-                    改写提示词
-                  </Button>
-                  <Button
-                    disabled={
-                      !!planningTurn ||
-                      !!busy ||
-                      !!draft.prompt_metadata?.continuation
-                    }
-                    title={
-                      draft.prompt_metadata?.continuation
-                        ? "通过对话修改整项视频任务"
-                        : "修改参数"
-                    }
-                    onClick={() => {
-                      const t = tools.data?.find((t) => t.id === draft.tool_id);
-                      if (t) openTool(t, draft);
-                    }}
-                  >
-                    <SlidersHorizontal size={14} />
-                    修改
-                  </Button>
-                  <Button
-                    title="放弃方案"
-                    disabled={!!busy}
-                    onClick={() =>
-                      action("dismiss", () =>
-                        api(`/plans/${draft.id}/dismiss`, "POST", {
-                          revision: draft.revision,
-                        }),
-                      )
-                    }
-                  >
-                    <X size={15} />
-                  </Button>
-                  <Button
-                    variant="primary"
-                    disabled={
-                      !conversationWritable ||
-                      !!busy ||
-                      !!planningTurn ||
-                      !!conversationRunning.length
-                    }
-                    onClick={() => execute(draft)}
-                  >
-                    <Play size={14} />
-                    确认生成
-                  </Button>
-                </div>
-              </div>
-            )}
-            <div ref={chatEnd} />
-          </div>
-          <form className="composer" onSubmit={send}>
-            <details className="composer-advanced">
-              <summary>
-                {store.toolPreferences?.[cid ?? ""]
-                  ? "高级设置 · 已限定工具"
-                  : "高级设置 · 自动选择生成方式"}
-              </summary>
-              <label className="composer-tool-choice">
-                <WandSparkles size={13} />
-                <span>工具</span>
-                <select
-                  aria-label="助手工具选择"
-                  value={store.toolPreferences?.[cid ?? ""] ?? ""}
-                  disabled={!conversationWritable || !!planningTurn || !!busy}
-                  onChange={(event) => {
-                    if (cid) store.setToolPreference(cid, event.target.value);
-                  }}
-                >
-                  <option value="">自动选择</option>
-                  {(tools.data ?? []).map((t) => (
-                    <option
-                      key={t.id}
-                      value={t.id}
-                      disabled={!t.assistant_guidance?.available}
-                    >
-                      {t.name}
-                      {!t.assistant_guidance?.available ? " · 当前不可用" : ""}
-                    </option>
-                  ))}
-                </select>
-                {cid && store.toolPreferences?.[cid] && (
-                  <button
-                    type="button"
-                    aria-label="恢复自动选择工具"
-                    disabled={!!planningTurn || !!busy}
-                    onClick={() => store.setToolPreference(cid, "")}
-                  >
-                    <X size={12} />
-                  </button>
-                )}
-              </label>
-            </details>
-            {store.selected.length > 0 && (
-              <>
-                <div className="context-selection">
-                  <Layers3 size={13} />
-                  已加入 {store.selected.length} 份素材
-                  <Button
-                    aria-label="取消素材选择"
-                    onClick={store.clear}
-                    type="button"
-                  >
-                    <X size={13} />
-                  </Button>
-                </div>
-                <div className="selected-context-assets">
-                  {selected.map((asset) => (
-                    <div className="selected-context-asset" key={asset.id}>
-                      <Thumb asset={asset} />
-                      <div>
-                        <span title={asset.name}>{asset.name}</span>
-                        {asset.media_type === "image" ? (
-                          <select
-                            aria-label={`${asset.name} 的读图用途`}
-                            value={store.imageRoles[asset.id] ?? "auto"}
-                            disabled={!!planningTurn || busy === "message"}
-                            onChange={(e) =>
-                              store.setImageRole(asset.id, e.target.value)
-                            }
-                          >
-                            {Object.entries(imageRoles).map(
-                              ([value, label]) => (
-                                <option key={value} value={value}>
-                                  {label}
-                                </option>
-                              ),
-                            )}
-                          </select>
-                        ) : (
-                          <small>仅发送文件信息，尚不读取内容</small>
-                        )}
-                      </div>
+                      ).width && (
+                        <span>
+                          {
+                            (
+                              draft.prompt_metadata?.continuation?.parameters ??
+                              draft.parameters
+                            ).width
+                          }{" "}
+                          ×{" "}
+                          {
+                            (
+                              draft.prompt_metadata?.continuation?.parameters ??
+                              draft.parameters
+                            ).height
+                          }
+                        </span>
+                      )}
+                      {(
+                        draft.prompt_metadata?.continuation?.parameters ??
+                        draft.parameters
+                      ).resolved_seconds && (
+                        <span>
+                          {(
+                            draft.prompt_metadata?.continuation?.parameters ??
+                            draft.parameters
+                          ).resolved_seconds.toFixed(2)}{" "}
+                          秒 ·{" "}
+                          {
+                            (
+                              draft.prompt_metadata?.continuation?.parameters ??
+                              draft.parameters
+                            ).resolved_frames
+                          }{" "}
+                          帧
+                        </span>
+                      )}
+                    </div>
+                    <PlanInputs plan={draft} tools={tools.data ?? []} />
+                    <PromptDetails
+                      key={`${draft.id}-${draft.revision}`}
+                      plan={draft}
+                      onError={setToast}
+                    />
+                    <div className="plan-actions">
                       <Button
-                        type="button"
-                        aria-label={`取消选择 ${asset.name}`}
-                        onClick={() => store.chooseAsset(asset.id, true)}
+                        title="按专用指引重新编写，保留执行参数"
+                        disabled={
+                          !conversationWritable ||
+                          !!busy ||
+                          !!planningTurn ||
+                          !!conversationRunning.length ||
+                          !tools.data?.find((t) => t.id === draft.tool_id)
+                            ?.assistant_guidance?.available ||
+                          draft.tool_id === "image.upscale.seedvr2"
+                        }
+                        onClick={() => rewritePrompt(draft)}
                       >
-                        <X size={12} />
+                        <RefreshCw size={14} />
+                        改写提示词
+                      </Button>
+                      <Button
+                        disabled={
+                          !!planningTurn ||
+                          !!busy ||
+                          !!draft.prompt_metadata?.continuation
+                        }
+                        title={
+                          draft.prompt_metadata?.continuation
+                            ? "通过对话修改整项视频任务"
+                            : "修改参数"
+                        }
+                        onClick={() => {
+                          const t = tools.data?.find(
+                            (t) => t.id === draft.tool_id,
+                          );
+                          if (t) openTool(t, draft);
+                        }}
+                      >
+                        <SlidersHorizontal size={14} />
+                        修改
+                      </Button>
+                      <Button
+                        title="放弃方案"
+                        disabled={!!busy}
+                        onClick={() =>
+                          action("dismiss", () =>
+                            api(`/plans/${draft.id}/dismiss`, "POST", {
+                              revision: draft.revision,
+                            }),
+                          )
+                        }
+                      >
+                        <X size={15} />
+                      </Button>
+                      <Button
+                        variant="primary"
+                        disabled={
+                          !conversationWritable ||
+                          !!busy ||
+                          !!planningTurn ||
+                          !!conversationRunning.length
+                        }
+                        onClick={() => execute(draft)}
+                      >
+                        <Play size={14} />
+                        确认生成
                       </Button>
                     </div>
-                  ))}
-                </div>
-                <div
-                  className={`vision-notice ${imageCount > visionLimit ? "over-limit" : ""}`}
-                >
-                  {selectedAssets.isPending
-                    ? "正在读取素材信息…"
-                    : selectedAssets.isError
-                      ? "素材信息读取失败，请重新选择。"
-                      : imageCount
-                        ? `本轮 ${imageCount} 张图片将发送至 DeepSeek 读图（上限 ${visionLimit} 张）`
-                        : "本轮仅发送素材文字信息"}
-                </div>
-              </>
-            )}
-            <textarea
-              aria-label="发送给创作助手"
-              placeholder={
-                !health.data?.planner.configured
-                  ? "先在设置中配置 DeepSeek 官方 API key"
-                  : "描述想法，选中图片或粘贴本工作台的图片链接…"
-              }
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              disabled={
-                !conversationWritable ||
-                !!conversationRunning.length ||
-                !!planningTurn ||
-                busy === "message"
-              }
-              onKeyDown={(e) => {
-                if (
-                  e.key === "Enter" &&
-                  !e.shiftKey &&
-                  !e.nativeEvent.isComposing
-                ) {
-                  e.preventDefault();
-                  e.currentTarget.form?.requestSubmit();
-                }
-              }}
-            />
-            {message.includes("/api/v1/assets/") && (
-              <div className="vision-notice">
-                当前项目的本工作台图片链接会自动加入读图，无需重复选择素材。
+                  </div>
+                )}
+                <div ref={chatEnd} />
               </div>
-            )}
-            <div className="composer-footer">
-              <span>
-                {conversationRunning.length
-                  ? "等待本次结果，再继续打磨"
-                  : project?.archived_at
-                    ? "项目已归档，解除归档后继续"
-                    : conversation?.archived_at
-                      ? "对话已归档，恢复后继续"
-                      : "确认后执行 · 完成后等待你的反馈"}
-              </span>
-              <Button
-                variant="primary"
-                type="submit"
-                aria-label="发送"
-                disabled={
-                  !conversationWritable ||
-                  !!planningTurn ||
-                  !!busy ||
-                  !!conversationRunning.length ||
-                  imageCount > visionLimit ||
-                  (!!store.selected.length &&
-                    (selectedAssets.isPending || selectedAssets.isError)) ||
-                  !message.trim() ||
-                  !health.data?.planner.configured
-                }
-              >
-                <ArrowUp size={17} />
-              </Button>
-            </div>
-          </form>
+              <form className="composer" onSubmit={send}>
+                <details className="composer-advanced">
+                  <summary>
+                    {store.toolPreferences?.[cid ?? ""]
+                      ? "高级设置 · 已限定工具"
+                      : "高级设置 · 自动选择生成方式"}
+                  </summary>
+                  <label className="composer-tool-choice">
+                    <WandSparkles size={13} />
+                    <span>工具</span>
+                    <select
+                      aria-label="助手工具选择"
+                      value={store.toolPreferences?.[cid ?? ""] ?? ""}
+                      disabled={
+                        !conversationWritable || !!planningTurn || !!busy
+                      }
+                      onChange={(event) => {
+                        if (cid)
+                          store.setToolPreference(cid, event.target.value);
+                      }}
+                    >
+                      <option value="">自动选择</option>
+                      {(tools.data ?? []).map((t) => (
+                        <option
+                          key={t.id}
+                          value={t.id}
+                          disabled={!t.assistant_guidance?.available}
+                        >
+                          {t.name}
+                          {!t.assistant_guidance?.available
+                            ? " · 当前不可用"
+                            : ""}
+                        </option>
+                      ))}
+                    </select>
+                    {cid && store.toolPreferences?.[cid] && (
+                      <button
+                        type="button"
+                        aria-label="恢复自动选择工具"
+                        disabled={!!planningTurn || !!busy}
+                        onClick={() => store.setToolPreference(cid, "")}
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
+                  </label>
+                </details>
+                {store.selected.length > 0 && (
+                  <>
+                    <div className="context-selection">
+                      <Layers3 size={13} />
+                      已加入 {store.selected.length} 份素材
+                      <Button
+                        aria-label="取消素材选择"
+                        onClick={store.clear}
+                        type="button"
+                      >
+                        <X size={13} />
+                      </Button>
+                    </div>
+                    <div className="selected-context-assets">
+                      {selected.map((asset) => (
+                        <div className="selected-context-asset" key={asset.id}>
+                          <Thumb asset={asset} />
+                          <div>
+                            <span title={asset.name}>{asset.name}</span>
+                            {asset.media_type === "image" ? (
+                              <select
+                                aria-label={`${asset.name} 的读图用途`}
+                                value={store.imageRoles[asset.id] ?? "auto"}
+                                disabled={!!planningTurn || busy === "message"}
+                                onChange={(e) =>
+                                  store.setImageRole(asset.id, e.target.value)
+                                }
+                              >
+                                {Object.entries(imageRoles).map(
+                                  ([value, label]) => (
+                                    <option key={value} value={value}>
+                                      {label}
+                                    </option>
+                                  ),
+                                )}
+                              </select>
+                            ) : (
+                              <small>仅发送文件信息，尚不读取内容</small>
+                            )}
+                          </div>
+                          <Button
+                            type="button"
+                            aria-label={`取消选择 ${asset.name}`}
+                            onClick={() => store.chooseAsset(asset.id, true)}
+                          >
+                            <X size={12} />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                    <div
+                      className={`vision-notice ${imageCount > visionLimit ? "over-limit" : ""}`}
+                    >
+                      {selectedAssets.isPending
+                        ? "正在读取素材信息…"
+                        : selectedAssets.isError
+                          ? "素材信息读取失败，请重新选择。"
+                          : imageCount
+                            ? `本轮 ${imageCount} 张图片将发送至 DeepSeek 读图（上限 ${visionLimit} 张）`
+                            : "本轮仅发送素材文字信息"}
+                    </div>
+                  </>
+                )}
+                <textarea
+                  aria-label="发送给创作助手"
+                  placeholder={
+                    !health.data?.planner.configured
+                      ? "先在设置中配置 DeepSeek 官方 API key"
+                      : "描述想法，选中图片或粘贴本工作台的图片链接…"
+                  }
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  disabled={
+                    !conversationWritable ||
+                    !!conversationRunning.length ||
+                    !!planningTurn ||
+                    busy === "message"
+                  }
+                  onKeyDown={(e) => {
+                    if (
+                      e.key === "Enter" &&
+                      !e.shiftKey &&
+                      !e.nativeEvent.isComposing
+                    ) {
+                      e.preventDefault();
+                      e.currentTarget.form?.requestSubmit();
+                    }
+                  }}
+                />
+                {message.includes("/api/v1/assets/") && (
+                  <div className="vision-notice">
+                    当前项目的本工作台图片链接会自动加入读图，无需重复选择素材。
+                  </div>
+                )}
+                <div className="composer-footer">
+                  <span>
+                    {conversationRunning.length
+                      ? "等待本次结果，再继续打磨"
+                      : project?.archived_at
+                        ? "项目已归档，解除归档后继续"
+                        : conversation?.archived_at
+                          ? "对话已归档，恢复后继续"
+                          : "确认后执行 · 完成后等待你的反馈"}
+                  </span>
+                  <Button
+                    variant="primary"
+                    type="submit"
+                    aria-label="发送"
+                    disabled={
+                      !conversationWritable ||
+                      !!planningTurn ||
+                      !!busy ||
+                      !!conversationRunning.length ||
+                      imageCount > visionLimit ||
+                      (!!store.selected.length &&
+                        (selectedAssets.isPending || selectedAssets.isError)) ||
+                      !message.trim() ||
+                      !health.data?.planner.configured
+                    }
+                  >
+                    <ArrowUp size={17} />
+                  </Button>
+                </div>
+              </form>
+            </>
+          )}
         </aside>
       </div>
       <footer className="task-bar">
@@ -2636,7 +2764,8 @@ export default function App() {
                   editingPlan ? "PATCH" : "POST",
                   {
                     ...body,
-                    conversation_id: editingPlan?.conversation_id ?? cid,
+                    conversation_id:
+                      editingPlan?.conversation_id ?? manualConversationId,
                     ...(editingPlan ? { revision: editingPlan.revision } : {}),
                   },
                 );

@@ -10,7 +10,7 @@ I2VA_INSTRUCTION = (
 COMPILER_VERSION = "2.0.0"
 
 
-def compile_document(tool_id, document, brief, resolved, bindings):
+def compile_document(tool_id, document, brief, resolved, bindings, *, autonomous=False):
     if tool_id == "image.upscale.seedvr2":
         if document is not None:
             raise ValueError("放大工具没有创作提示词，prompt_document必须为null")
@@ -62,9 +62,9 @@ def compile_document(tool_id, document, brief, resolved, bindings):
             document.overall_soundscape.strip() != "N/A" or document.non_diegetic_music.strip() != "N/A"
         ):
             raise ValueError("完全静音要求两个声音字段都为N/A")
-        if audio.music is not True and document.non_diegetic_music.strip() != "N/A":
+        if (audio.music is False or (not autonomous and audio.music is not True)) and document.non_diegetic_music.strip() != "N/A":
             raise ValueError("未要求配乐时non_diegetic_music必须为N/A")
-        if brief.camera_policy in ("static", "unspecified"):
+        if brief.camera_policy == "static" or (not autonomous and brief.camera_policy == "unspecified"):
             if len(shots) != 1:
                 raise ValueError("默认/固定镜头不能擅自增加切镜")
             movement = r"\b(?:push(?:es|ing)?\s+in|pull(?:s|ing)?\s+out|zoom(?:s|ing)?|pan(?:s|ning)?|truck(?:s|ing)?|tilt(?:s|ing)?|orbit(?:s|ing)?)\b"
@@ -76,7 +76,7 @@ def compile_document(tool_id, document, brief, resolved, bindings):
         protected_dialogue = [item.text for item in brief.literal_texts if item.kind in ("dialogue", "lyrics")]
         if audio.silence and dialogue:
             raise ValueError("静音视频不能包含对白")
-        if any(text not in protected_dialogue for _, text in dialogue):
+        if not autonomous and any(text not in protected_dialogue for _, text in dialogue):
             raise ValueError("正文新增或改写了用户未提供的台词/歌词")
         if protected_dialogue and sorted(text for _, text in dialogue) != sorted(protected_dialogue):
             raise ValueError("台词/歌词必须逐字保留且不得无故重复")

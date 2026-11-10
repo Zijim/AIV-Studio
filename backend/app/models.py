@@ -47,10 +47,12 @@ class Project(Entity, Base):
 class Conversation(Entity, Base):
     __tablename__ = "conversations"
     __table_args__ = (
+        UniqueConstraint("project_id", "id", name="uq_conversation_project_id"),
         Index("ix_conversations_project", "project_id", "updated_at"),
         Index("uq_default_conversation", "project_id", unique=True, sqlite_where=text("is_default = 1")),
     )
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
+    mode: Mapped[str] = mapped_column(default="assisted")
     title: Mapped[str] = mapped_column(String(120), default="新对话")
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     auto_title: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -188,6 +190,7 @@ class Plan(Base):
     plan_hash: Mapped[str]
     state: Mapped[str] = mapped_column(default="draft")
     origin: Mapped[str] = mapped_column(default="manual")
+    agent_run_id: Mapped[str | None] = mapped_column(ForeignKey("creative_agent_runs.id"), index=True)
     created_at: Mapped[str] = mapped_column(default=now)
 
 
@@ -199,6 +202,8 @@ class Task(Entity, Base):
     plan_revision: Mapped[int]
     turn_id: Mapped[str | None] = mapped_column(ForeignKey("agent_turns.id"))
     origin: Mapped[str]
+    agent_run_id: Mapped[str | None] = mapped_column(ForeignKey("creative_agent_runs.id"), index=True)
+    agent_call_id: Mapped[str | None] = mapped_column(ForeignKey("creative_agent_calls.id"), unique=True)
     queue_seq: Mapped[int] = mapped_column(unique=True)
     state: Mapped[str] = mapped_column(default="queued")
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -224,6 +229,9 @@ class Execution(Entity, Base):
     inputs: Mapped[list] = mapped_column(JSON)
     execution_state: Mapped[str] = mapped_column(default="pending")
     storage_state: Mapped[str] = mapped_column(default="none")
+    # Autonomous execution slots include pending reservations. Only a proven
+    # unsubmitted attempt can release its slot; uncertain/accepted attempts remain.
+    agent_quota_state: Mapped[str | None]
     submitted_payload: Mapped[dict | None] = mapped_column(JSON)
     executed_payload: Mapped[dict | None] = mapped_column(JSON)
     history: Mapped[dict | None] = mapped_column(JSON)
@@ -293,6 +301,70 @@ class Idempotency(Base):
     scope: Mapped[str]
     result: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[str] = mapped_column(default=now)
+
+
+class CreativeAgentRun(Entity, Base):
+    __tablename__ = "creative_agent_runs"
+    __table_args__ = (
+        ForeignKeyConstraint(["project_id", "conversation_id"], ["conversations.project_id", "conversations.id"]),
+        Index("ix_creative_run_project", "project_id", "created_at"),
+        Index("uq_creative_active_conversation", "conversation_id", unique=True,
+              sqlite_where=text("state NOT IN ('completed', 'cancelled', 'failed')")),
+    )
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"))
+    parent_run_id: Mapped[str | None] = mapped_column(ForeignKey("creative_agent_runs.id"))
+    goal: Mapped[str] = mapped_column(Text)
+    goal_snapshot: Mapped[dict] = mapped_column(JSON)
+    scope: Mapped[dict] = mapped_column(JSON)
+    access: Mapped[dict] = mapped_column(JSON)
+    limits: Mapped[dict] = mapped_column(JSON)
+    state: Mapped[str] = mapped_column(default="queued")
+    control_version: Mapped[int] = mapped_column(default=1)
+    intent: Mapped[str] = mapped_column(default="undecided")
+    work_plan: Mapped[dict] = mapped_column(JSON, default=dict)
+    issues: Mapped[dict] = mapped_column(JSON, default=dict)
+    clarifications: Mapped[list] = mapped_column(JSON, default=list)
+    deliverables: Mapped[list] = mapped_column(JSON, default=list)
+    completion: Mapped[dict | None] = mapped_column(JSON)
+    stop_reason: Mapped[dict | None] = mapped_column(JSON)
+    execution_count: Mapped[int] = mapped_column(default=0)
+    model_count: Mapped[int] = mapped_column(default=0)
+    tool_count: Mapped[int] = mapped_column(default=0)
+    no_progress: Mapped[int] = mapped_column(default=0)
+    active_ms: Mapped[int] = mapped_column(default=0)
+    updated_at: Mapped[str] = mapped_column(default=now)
+    finished_at: Mapped[str | None]
+
+
+class CreativeAgentStep(Entity, Base):
+    __tablename__ = "creative_agent_steps"
+    __table_args__ = (UniqueConstraint("run_id", "sequence"), UniqueConstraint("run_id", "id"))
+    run_id: Mapped[str] = mapped_column(ForeignKey("creative_agent_runs.id"), index=True)
+    sequence: Mapped[int]
+    control_version: Mapped[int]
+    state: Mapped[str] = mapped_column(default="requesting")
+    attempts: Mapped[int] = mapped_column(default=0)
+    request_data: Mapped[dict] = mapped_column(JSON, default=dict)
+    response_data: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[dict | None] = mapped_column(JSON)
+
+
+class CreativeAgentCall(Entity, Base):
+    __tablename__ = "creative_agent_calls"
+    __table_args__ = (UniqueConstraint("step_id", "call_id"), UniqueConstraint("step_id", "position"),
+                      ForeignKeyConstraint(["run_id", "step_id"], ["creative_agent_steps.run_id", "creative_agent_steps.id"]))
+    run_id: Mapped[str] = mapped_column(ForeignKey("creative_agent_runs.id"), index=True)
+    step_id: Mapped[str] = mapped_column(ForeignKey("creative_agent_steps.id"), index=True)
+    call_id: Mapped[str]
+    position: Mapped[int]
+    name: Mapped[str]
+    arguments: Mapped[str] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(default="pending")
+    result: Mapped[dict | None] = mapped_column(JSON)
+    asset_id: Mapped[str | None] = mapped_column(ForeignKey("assets.id"))
+    plan_id: Mapped[str | None]
+    request_hash: Mapped[str | None]
 
 
 class Setting(Base):

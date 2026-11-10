@@ -58,6 +58,8 @@ export const useWorkspace = create(
     projectId: string;
     conversationId: string;
     conversationsByProject: Record<string, string>;
+    conversationsByMode: Record<string, string>;
+    agentKeyAssets: Record<string, boolean>;
     messageDrafts: Record<string, string>;
     toolPreferences: Record<string, string>;
     conversationInputs: Record<
@@ -68,9 +70,10 @@ export const useWorkspace = create(
     imageRoles: Record<string, string>;
     taskOpen: boolean;
     chooseProject: (id: string) => void;
-    chooseConversation: (id: string) => void;
+    chooseConversation: (id: string, mode?: string) => void;
     setMessageDraft: (id: string, value: string) => void;
     setToolPreference: (id: string, value: string) => void;
+    setAgentKeyAssets: (id: string, value: boolean) => void;
     chooseAsset: (id: string, additive?: boolean) => void;
     setImageRole: (id: string, role: string) => void;
     clear: () => void;
@@ -80,6 +83,8 @@ export const useWorkspace = create(
       projectId: "",
       conversationId: "",
       conversationsByProject: {},
+      conversationsByMode: {},
+      agentKeyAssets: {},
       messageDrafts: {},
       toolPreferences: {},
       conversationInputs: {},
@@ -108,7 +113,7 @@ export const useWorkspace = create(
             imageRoles: inputs[cid]?.imageRoles ?? {},
           };
         }),
-      chooseConversation: (id) =>
+      chooseConversation: (id, mode = "assisted") =>
         set((s) => {
           const inputs = {
             ...s.conversationInputs,
@@ -127,6 +132,10 @@ export const useWorkspace = create(
               ...s.conversationsByProject,
               [s.projectId]: id,
             },
+            conversationsByMode: {
+              ...s.conversationsByMode,
+              [`${s.projectId}:${mode}`]: id,
+            },
             conversationInputs: inputs,
             selected: inputs[id]?.selected ?? [],
             imageRoles: inputs[id]?.imageRoles ?? {},
@@ -138,6 +147,8 @@ export const useWorkspace = create(
         set((s) => ({
           toolPreferences: { ...s.toolPreferences, [id]: value },
         })),
+      setAgentKeyAssets: (id, value) =>
+        set((s) => ({ agentKeyAssets: { ...s.agentKeyAssets, [id]: value } })),
       chooseAsset: (id, additive) =>
         set((s) => {
           const selected = additive

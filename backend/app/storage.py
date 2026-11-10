@@ -145,8 +145,18 @@ class Storage:
         candidate_index=None,
         inputs=None,
         artifact_id=None,
+        stable_asset_id=None,
     ):
-        asset_id = uid()
+        asset_id = stable_asset_id or uid()
+        if stable_asset_id:
+            async with self.db.session() as session:
+                old = await session.get(Asset, stable_asset_id)
+                if old:
+                    if old.blob_id != await asyncio.to_thread(file_hash, staged):
+                        raise AppError("document_conflict", "相同文档写入身份对应了不同内容。", 409)
+                    if staged.resolve() != self.resolve((await session.get(Blob, old.blob_id)).relative_path):
+                        staged.unlink(missing_ok=True)
+                    return old.id
         preview = self.root / "previews" / (asset_id + ".png")
         sha = await asyncio.to_thread(file_hash, staged)
         metadata = await asyncio.to_thread(inspect_file, staged, name, preview)

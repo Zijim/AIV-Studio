@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     upscale_max_edge: int = 3072
     video_max_pixels: int = 630000
     video_max_frames: int = 243
+    agent_max_executions: int = Field(default=12, ge=1, le=100)
+    agent_max_issue_reworks: int = Field(default=2, ge=0, le=10)
+    agent_max_model_requests: int = Field(default=40, ge=1, le=200)
+    agent_max_tool_calls: int = Field(default=120, ge=1, le=1000)
+    agent_max_no_progress: int = Field(default=3, ge=1, le=20)
+    agent_active_seconds: int = Field(default=1800, ge=30, le=14400)
+    agent_media_seconds: int = Field(default=60, ge=5, le=180)
+    agent_media_max_frames: int = Field(default=1800, ge=30, le=18000)
 
     @field_validator("public_origin")
     @classmethod
@@ -106,6 +114,10 @@ def load_settings() -> Settings:
                 value = raw.get(section, {}).get(src)
                 if value not in (None, "") and f"AIV_{dst.upper()}" not in os.environ:
                     values[dst] = value
+        for key, value in raw.get("agent", {}).items():
+            target = "agent_" + key
+            if target in Settings.model_fields and f"AIV_{target.upper()}" not in os.environ:
+                values[target] = value
     settings = Settings(**values)
     settings.data_dir = settings.data_dir.resolve()
     for folder in ("blobs", "staging", "previews", "executions", "registry", "logs", "backups"):

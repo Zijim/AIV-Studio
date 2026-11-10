@@ -33,6 +33,8 @@ class MaintenanceService:
         self.lock = asyncio.Lock()
 
     async def ensure_idle(self, s):
+        from .creative_agent_scope import protect_active
+        await protect_active(s)
         from .models import AgentTurn
 
         active = await s.scalar(select(Task).where(Task.state.in_(ACTIVE_TASKS)).limit(1))
