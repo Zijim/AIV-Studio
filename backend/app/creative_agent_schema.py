@@ -103,7 +103,10 @@ class AutonomousVideoDocument(VideoDocument):
 
 class Creation(Capability):
     inputs: list[InputRef] = Field(default_factory=list, max_length=9)
-    parameters: dict = Field(default_factory=dict)
+    parameters: dict = Field(
+        default_factory=dict,
+        description="Execution parameters. For image.generate.qwen use preset=fast (4-step Lightning LoRA) by default. When the user explicitly selects the 50-step quality preset, record preset=quality in creative_brief.requested_parameters.",
+    )
     prompt_document: dict | None = None
     purpose: str = Field(min_length=1, max_length=1200)
     operation_id: str = Field(

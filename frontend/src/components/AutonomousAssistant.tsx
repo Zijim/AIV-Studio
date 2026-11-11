@@ -238,7 +238,7 @@ export function AutonomousAssistant({
                     <span>
                       {item.state === "completed" ? (
                         <Check size={13} />
-                      ) : item.state === "running" ? (
+                      ) : active && item.state === "running" ? (
                         <LoaderCircle size={13} className="spin" />
                       ) : (
                         "○"

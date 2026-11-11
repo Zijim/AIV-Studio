@@ -458,6 +458,59 @@ class CreativeAgentTests(AgentTestCase):
         async with self.db.session() as s:
             self.assertEqual(await s.scalar(select(func.count()).select_from(Task)), 0)
 
+    async def test_qwen_preview_and_submission_default_to_lightning(self):
+        rid = await self.start("生成一张写实的灭霸照片")
+        args = {
+            "capability_id": "image.generate.qwen",
+            "operation_id": "main",
+            "purpose": "生成写实人物",
+            "parameters": {"preset": "quality"},
+            "prompt_document": {"positive_prompt": "A realistic portrait."},
+        }
+
+        async def provider(request):
+            calls = await self.calls(rid)
+            if not calls:
+                return response(
+                    ("plan", "update_plan", plan()),
+                    ("preview", "preview_creation", args),
+                    ("generate", "invoke_creation", args),
+                )
+            task_id = next(c.result["data"]["task_id"] for c in calls if c.call_id == "generate")
+            return response(("wait", "wait_for_tasks", {"task_ids": [task_id]}))
+
+        self.agent.provider = provider
+        await self.agent.drive(rid)
+        calls = {call.call_id: call.result for call in await self.calls(rid)}
+        self.assertEqual(calls["preview"]["data"]["resolved"]["preset"], "fast")
+        self.assertEqual(calls["generate"]["data"]["metadata"]["parameter_sources"]["preset"], "default_or_resolved")
+        task_id = calls["generate"]["data"]["task_id"]
+        async with self.db.session() as session:
+            execution = await session.scalar(select(Execution).where(Execution.task_id == task_id))
+        self.assertEqual(execution.parameters["preset"], "fast")
+        graph = self.state.registry.render(execution.tool_id, execution.tool_version, execution.parameters, {}, execution.id)
+        self.assertTrue(graph["11"]["inputs"]["value"])
+        steps_node = graph["14"]["inputs"]["on_true"][0]
+        lora_node = graph["13"]["inputs"]["on_true"][0]
+        self.assertEqual(graph[steps_node]["inputs"]["value"], 4)
+        self.assertIn("Lightning-4steps", graph[lora_node]["inputs"]["lora_name"])
+
+    async def test_qwen_respects_explicit_quality_preset(self):
+        rid = await self.start("请用 50 步质量档生成一张图片")
+        result = await self.agent.tools.preview_creation(
+            await self.run_record(rid),
+            None,
+            Creation(
+                capability_id="image.generate.qwen",
+                operation_id="main",
+                purpose="按用户指定的质量档生成",
+                prompt_document={"positive_prompt": "A realistic portrait."},
+                creative_brief={"requested_parameters": {"preset": "quality"}},
+            ),
+            1,
+        )
+        self.assertEqual(result["data"]["resolved"]["preset"], "quality")
+
     async def test_necessary_answer_is_paired_idempotent_and_cannot_be_free_input(self):
         from app.creative_agent_schema import Answer
 

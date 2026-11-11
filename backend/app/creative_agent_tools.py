@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import re
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
@@ -42,6 +43,7 @@ from .schemas import ExecutePlan, ManualPlan
 from .storage import atomic_json, file_hash
 
 GUIDE_VERSION = "1.1.0"
+QWEN_QUALITY_MENTION = re.compile(r"(?<!\d)50\s*(?:步|steps?\b)|质量(?:档|模式|预设)|\bquality\b", re.I)
 
 
 def creation_document_adapter(tool_id):
@@ -361,7 +363,20 @@ class AgentTools:
                 execution = await session.get(Execution, source.execution_id) if source.execution_id else None
                 if execution and execution.tool_id == tool["id"]:
                     source_params = dict(execution.parameters)
-        params = {**source_params, **args.parameters}
+        parameters = dict(args.parameters)
+        if tool["id"] == "image.generate.qwen":
+            user_texts = (run.goal, *(entry["answer"] for entry in run.clarifications))
+            requested_quality = args.creative_brief.requested_parameters.get("preset") == "quality" and any(
+                QWEN_QUALITY_MENTION.search(value) for value in user_texts
+            )
+            if requested_quality and parameters.get("preset", "fast") in ("fast", "quality"):
+                parameters["preset"] = "quality"
+            else:
+                # A model choice or an inherited preset should use the schema default.
+                for values in (source_params, parameters):
+                    if values.get("preset") == "quality":
+                        del values["preset"]
+        params = {**source_params, **parameters}
         for key in (
             "prompt",
             "instruction",
@@ -430,7 +445,7 @@ class AgentTools:
             "creative_brief": args.creative_brief.model_dump(),
             "parameter_sources": {
                 k: "explicit_or_designed"
-                if k in args.parameters
+                if k in parameters
                 else "inherited"
                 if k in source_params
                 else "default_or_resolved"
