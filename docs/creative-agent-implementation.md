@@ -7,7 +7,7 @@
 - 右侧“辅助创作 / 自主创作”切换；对话固定模式，分别恢复对话、输入草稿及素材选择，其他对话的活动 Agent 提供返回入口。
 - 中间工作台的手动工具入口继续可用；自主面板打开时，手动操作归入项目默认辅助对话，不作为修改活动 Run 的旁路，也不自动扩大 Agent 的素材范围。
 - 独立 `CreativeAgentRun / Step / Call`、完整 Responses 原生函数调用与结果配对。主模型自行决定讨论回复、创作路径、必要澄清、观察、返工和交付，没有增加路由模型或固定生成流程。
-- 14 个工作台 tools：项目背景、限定素材搜索与读取、媒体观察、能力目录和指引、按需预检、统一创作调用、任务读取和持久等待、版本化文档、可见计划、必要澄清、交付。
+- 15 个工作台 tools：首次素材范围确认、项目背景、限定素材搜索与读取、媒体观察、能力目录和指引、按需预检、统一创作调用、任务读取和持久等待、版本化文档、可见计划、必要澄清、交付。
 - 复用现有注册创作工具、参数 Schema、确定性提示词编译、Plan / Task / Execution、ComfyUI Worker、存储回执与 SSE。使用独立 `autonomous` 来源，单个生成结束不会替整个 Run 完成或要求人工反馈。
 - 创建与澄清回答幂等，调用先持久化；创作提交的调用关联、执行预约和问题计数与 Task / Execution 在同一事务中提交。恢复先核对原身份，不重建未知生成。
 - Worker 在排队结束、素材上传及真实提交前再次核验素材权限与取消状态。确定未提交的失败/取消释放预留名额；已受理、未知提交和有真实产物的尝试保留计数，释放本身有幂等状态与事件记录。
@@ -24,17 +24,18 @@
 | --- | --- |
 | 调度、原生协议、恢复、上下文与控制 | `backend/app/creative_agent.py` |
 | 同对话讨论记录、按需读取与历史素材权限 | `backend/app/creative_agent_history.py` |
-| 14 个 tools 及输入 Schema | `backend/app/creative_agent_schema.py` |
+| 15 个 tools 及输入 Schema | `backend/app/creative_agent_schema.py` |
 | 工作台与现有创作能力适配 | `backend/app/creative_agent_tools.py` |
 | 统一素材范围与资源管理保护 | `backend/app/creative_agent_scope.py` |
 | 证据核验、执行与返工计数 | `backend/app/creative_agent_policy.py` |
 | PyAV / FFmpeg 观察准备 | `backend/app/creative_agent_media.py` |
 | Run / 活动 / 澄清 / 控制 API | `backend/app/creative_agent_api.py` |
-| 新模式指引与不可变 hash | `prompt_guides/autonomous/1.0.0/` |
+| 新模式指引与不可变 hash | `prompt_guides/autonomous/1.1.0/`（保留 1.0.0） |
 | 数据迁移 | `backend/migrations/versions/d81a0c4e2100_creative_agent.py` |
 | 执行预约状态迁移 | `backend/migrations/versions/e92a5b8c3100_agent_execution_reservations.py` |
 | 自主助手面板 | `frontend/src/components/AutonomousAssistant.tsx` |
 | 协议、权限与恢复测试 | `backend/tests/test_creative_agent.py` |
+| 素材收窄、生产身份及返工边界测试 | `backend/tests/test_creative_agent_boundaries.py` |
 | 独立工作区真实验证 | `scripts/validate_creative_agent.py` |
 
 迁移新增表和可空关联字段，旧对话默认为 `assisted`。保留原有启动迁移前备份流程；迁移包含冻结 DDL、模式兼容、活动对话唯一性和归属约束。启动时先恢复原存储与 Worker，再恢复自主 Run。
@@ -95,4 +96,32 @@ media_max_frames = 1800
 ```powershell
 $env:PYTHONPATH = 'backend;backend/tests'
 .venv/Scripts/python.exe -X utf8 -m unittest test_creative_agent test_project_library test_public_access test_media_delivery test_task_identity test_task_media test_task_timing -q
+```
+
+## 素材收窄与返工归属补充（2026-11-10）
+
+新 Run 初始素材权限为待确认。原有勾选和明确引用构成权限上限，但不会立即把素材名称、备注、缩略图或正文发给模型。同一个主 Agent 通过新增 `set_resource_scope` 将用户原文解释为 `available`、`selected_only`、`none` 或 `only` 策略；可用具体 ID 或用户原文中的完整名称包含/排除素材。后台先在原授权集合内定位，再固化范围，排除项优先。搜索、分页聚合、读取、观察、预检、Plan 创建、执行提交和 Worker 真实提交均遵守生效范围；模型不能用该工具重新打开已封闭的范围。普通无素材讨论可以直接回复。
+
+自然语言的含义由同一个主 Agent 判断，后台负责结构化策略、原文引文、身份及权限上限校验，不新增独立路由模型或用关键词编排创作。名称不完整、重名或不在授权集合内时需要用户明确选择；不以名称解析为由开放全库。必要澄清中用户新选择的素材单独授权，不恢复先前排除的其他素材；当前 Run 自己的新成果照常可用。
+
+生产身份从显示计划中分离：`update_plan.creation_targets` 在生成前声明媒体产物及必要中间结果的稳定 ID、含义、媒体类型和要求绑定。后台生成 `operation_key`；`invoke_creation.operation_id` 引用生产目标 ID，而非 `items[].id`。首次创建生产任务后固定生产定义，允许继续调整可见步骤、状态、计划说明、工具和参数。生产目标清单可以在生成前调整；执行后不能通过新增、改名或改变含义来创造免费重做入口。重复同一生产目标必须关联本目标的原产物证据，返工次数仍按稳定要求计数，确定未提交的名额释放规则保留。
+
+无需修改数据库结构：生效策略、稳定生产定义与冻结标记保存在现有 JSON 字段，执行身份同时进入 Plan / Execution 的冻结元信息。旧 Run 缺少新字段时保留原权限和原操作 ID 兼容规则，不改写历史任务或交付事实。新指引发布为 1.1.0，原 1.0.0 文件保留。
+
+针对性回归包括：首次模型请求不含素材元信息、原文收窄后搜索与直接读取受限、精确名称及排除优先、关键素材开关不能重开、无参考仍能使用新成果、范围回执幂等、必要澄清的单份授权、计划步骤改名、生产目标改名/换含义/换要求受限、原问题额度不能省略、证据不能挪用、恢复后稳定身份和旧版本兼容，以及独立首帧和视频目标照常连续执行。
+
+真实模型素材验证：`scripts/validate_creative_agent.py --scope` 在独立工作区放入两份选中素材和一份带检测标记的关键素材。用户原文限定只用 `chosen.md`、排除 `excluded.md` 且不读取关键素材；3 次真实模型请求完成范围确认、搜索和普通回复，实际可用集合仅含 `chosen.md`，发送前检查确认关键素材标记未进入任何模型请求，生成执行为 0。报告：`.data/agent-validation/d2271030-295b-4075-9bfa-dc07fc7702a4/report.json`。
+
+补充回归：11 项边界用例通过；完整 87 项回归通过（546.509 秒），最后补充的生产目标含义冻结与恢复断言专项通过。前端构建、Ruff 和差异空白检查通过。旧指引 1.0.0 未修改。
+
+验证脚本另支持 `--resume <独立工作区目录>`，只接受 `.data/agent-validation` 的直接子目录，恢复已经存在的 Run / Task，不创建新的生成。验证等待期限覆盖生成自身超时；恢复仍沿用原 Execution 的冻结截止条件，不把重启当作延长生成时间的理由。
+
+额外真实图片验证记录：`.data/agent-validation/25223d51-f855-4728-b055-229e1faac68a/report.json`。模型完成范围确认、能力读取、生产目标声明和唯一一次 Qwen 图片提交；验证进程中断后用同一工作区恢复，Run / Task / 稳定操作身份及已用次数保持。生成达到冻结的 900 秒限制后请求取消，未保存图片；Agent 的再次提交被本次 1 次执行上限拦截，随后标记需要处理，没有重复生成或冒充交付。本次只证明真实提交、恢复及限额停止行为，不记为图片成品闭环通过。
+
+复现新增验证：
+
+```powershell
+.venv/Scripts/python.exe -X utf8 scripts/validate_creative_agent.py --scope
+$env:PYTHONPATH = 'backend;backend/tests'
+.venv/Scripts/python.exe -X utf8 -m unittest test_creative_agent test_creative_agent_boundaries test_project_library test_public_access test_media_delivery test_task_identity test_task_media test_task_timing -q
 ```

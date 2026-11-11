@@ -52,6 +52,8 @@ async def capture_history(session, run):
     ).all()
     history, refs_by_run = [], {}
     for message in reversed(messages):
+        if (message.details or {}).get("agent_run_id") == run.id:
+            continue
         refs = set()
         if message.role == "assistant":
             details = message.details or {}

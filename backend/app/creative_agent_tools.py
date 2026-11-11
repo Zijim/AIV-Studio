@@ -6,14 +6,21 @@ import json
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
+from pydantic import TypeAdapter
 from sqlalchemy import select
 
 from .config import ROOT
-from .creative_agent_history import history_page
+from .creative_agent_history import capture_history, history_page
 from .creative_agent_media import observe
-from .creative_agent_policy import consumed_evidence
-from .creative_agent_schema import TOOL_MODELS
-from .creative_agent_scope import allowed_assets, require_running, scoped_asset
+from .creative_agent_policy import consumed_evidence, operation_key, production_operation, production_operations
+from .creative_agent_schema import TOOL_MODELS, AutonomousVideoDocument
+from .creative_agent_scope import (
+    allowed_assets,
+    require_running,
+    require_scope_ready,
+    resolve_scope_references,
+    scoped_asset,
+)
 from .errors import AppError
 from .models import (
     Asset,
@@ -29,10 +36,18 @@ from .models import (
     row_dict,
 )
 from .prompt_compile import COMPILER_VERSION, compile_document
-from .prompt_composition import composition_model
+from .prompt_composition import VideoDocument, composition_model
 from .prompt_guides import content_hash
 from .schemas import ExecutePlan, ManualPlan
 from .storage import atomic_json, file_hash
+
+GUIDE_VERSION = "1.1.0"
+
+
+def creation_document_adapter(tool_id):
+    if tool_id.startswith("video.") and tool_id != "video.generate.minimax_ref2v":
+        return TypeAdapter(AutonomousVideoDocument | None)
+    return TypeAdapter(composition_model(tool_id).model_fields["prompt_document"].annotation)
 
 
 def success(data=None, *, resources=None, effects=None):
@@ -61,7 +76,7 @@ class AgentTools:
         self.state = state
         self.db, self.storage, self.settings = state.db, state.storage, state.settings
         self.registry, self.plans, self.guides = state.registry, state.plans, state.planner.guides
-        folder = ROOT / "prompt_guides" / "autonomous" / "1.0.0"
+        folder = ROOT / "prompt_guides" / "autonomous" / GUIDE_VERSION
         self.guide_text = (folder / "guide.md").read_text(encoding="utf-8")
         manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
         if hashlib.sha256(self.guide_text.encode()).hexdigest() != manifest["sha256"]:
@@ -138,10 +153,17 @@ class AgentTools:
                 "goal": run.goal,
                 "project": run.goal_snapshot["project"],
                 "selected_roles": run.scope.get("image_roles", {}),
+                "resource_scope": {
+                    "policy": run.scope.get("reference_policy", {"state": "resolved", "mode": "available"}),
+                    "explicit_asset_ids": run.scope.get("selected", []),
+                    "key_assets_enabled_by_user": run.scope.get("use_key_assets", True),
+                    "rule": "Seal scope with set_resource_scope before material access. Existing materials can only be narrowed; Run outputs remain usable.",
+                },
                 "clarifications": run.clarifications,
                 "materials": materials,
                 "conversation_history": history,
                 "work_plan": run.work_plan,
+                "production_operations": production_operations(run),
                 "limits": run.limits,
                 "used": {
                     "executions": run.execution_count,
@@ -153,7 +175,41 @@ class AgentTools:
             }
         )
 
+    async def set_resource_scope(self, run, call, args, version):
+        async with self.db.transaction() as session:
+            run = await require_running(session, run.id, version)
+            old = run.scope.get("reference_policy", {})
+            if old.get("call_id") == call.id:
+                if old.get("request_hash") != content_hash(args.model_dump()):
+                    raise AppError("scope_idempotency_conflict", "同一范围确认调用不能替换参数。", 409)
+                return success(old)
+            if old.get("state") == "resolved":
+                raise AppError("scope_frozen", "本次素材范围已经确认，不能由模型重新扩大或替换。", 409)
+            if args.mode != "only" and (args.only_asset_ids or args.only_names):
+                raise AppError("scope_mode", "指定 only 素材列表时必须使用 only 模式，不能静默忽略限制。", 409)
+            if args.mode == "only" and not (args.only_asset_ids or args.only_names):
+                raise AppError("scope_empty", "only 模式必须明确素材 ID 或用户原文中的名称；无素材请使用 none。", 409)
+            included = await resolve_scope_references(
+                session, run, args.only_asset_ids, args.only_names, args.user_quote
+            )
+            excluded = await resolve_scope_references(
+                session, run, args.exclude_asset_ids, args.exclude_names, args.user_quote
+            )
+            policy = {
+                "state": "resolved", "mode": args.mode,
+                "only_asset_ids": [aid for aid in included if aid not in excluded],
+                "excluded_asset_ids": excluded, "user_quote": args.user_quote, "call_id": call.id,
+                "request_hash": content_hash(args.model_dump()),
+            }
+            run.scope = {**run.scope, "reference_policy": policy}
+            # Recapture permitted discussion only after the material boundary is
+            # known. The original goal/project snapshot is otherwise unchanged.
+            run.goal_snapshot = {**run.goal_snapshot, "conversation_history": await capture_history(session, run)}
+            record_event(session, "agent.updated", run.project_id, run.id)
+            return success(policy, effects=[{"type": "resource_scope", "id": run.id}])
+
     async def search_resources(self, run, call, args, version):
+        require_scope_ready(run)
         async with self.db.session() as session:
             return success(await self.resources(session, run, args))
 
@@ -208,16 +264,16 @@ class AgentTools:
 
     def capability(self, tool):
         guide = self.guides.get(tool["id"], tool["version"])
-        model = composition_model(tool["id"])
+        doc_schema = creation_document_adapter(tool["id"]).json_schema()
         snapshot = {
             "binding": {"tool_id": tool["id"], "tool_version": tool["version"], "agent_guide": self.guide_manifest},
             "guide": self.guide_text,
             "knowledge_hash": guide["effective_hash"],
-            "document_schema": model.model_json_schema(),
+            "document_schema": doc_schema,
             "examples": guide["examples"],
         }
         digest = content_hash(snapshot)
-        path = self.settings.data_dir / "prompt_guides" / "autonomous" / "1.0.0" / f"{digest}.json"
+        path = self.settings.data_dir / "prompt_guides" / "autonomous" / GUIDE_VERSION / f"{digest}.json"
         if not path.exists():
             atomic_json(path, snapshot)
         from .schemas import PARAMETER_MODELS
@@ -227,7 +283,6 @@ class AgentTools:
             k: v for k, v in schema["properties"].items() if k not in ("prompt", "instruction", "negative_prompt")
         }
         schema["required"] = [k for k in schema.get("required", []) if k in schema["properties"]]
-        doc_schema = model.model_json_schema()
         return {
             "capability_id": tool["id"],
             "version": tool["version"],
@@ -236,7 +291,7 @@ class AgentTools:
             "inputs": tool["inputs"],
             "availability": tool["availability"],
             "parameter_schema": schema,
-            "prompt_document_schema": doc_schema["properties"]["prompt_document"],
+            "prompt_document_schema": {key: value for key, value in doc_schema.items() if key != "$defs"},
             "$defs": doc_schema.get("$defs", {}),
             "guide": self.guide_text,
             "examples": guide["examples"],
@@ -284,6 +339,7 @@ class AgentTools:
         return success(self.capability(self.registry.get(args.capability_id, args.version)))
 
     async def prepare_creation(self, run, args):
+        require_scope_ready(run)
         tool = self.registry.get(args.capability_id, args.version)
         capability = self.capability(tool)
         if any(k in args.parameters for k in ("prompt", "instruction", "negative_prompt")):
@@ -319,10 +375,12 @@ class AgentTools:
         if tool["category"] == "video":
             params.pop("width", None)
             params.pop("height", None)
-        model = composition_model(tool["id"])
-        from pydantic import TypeAdapter
-
-        doc = TypeAdapter(model.model_fields["prompt_document"].annotation).validate_python(args.prompt_document)
+        doc = creation_document_adapter(tool["id"]).validate_python(args.prompt_document)
+        if isinstance(doc, AutonomousVideoDocument) and doc.style_description:
+            document = doc.model_dump(exclude={"style_description"})
+            first_shot = document["shots"][0]
+            first_shot["description"] = f"{doc.style_description.strip()}\n{first_shot['description']}"
+            doc = VideoDocument.model_validate(document)
         # Normalize once with placeholder text to obtain deterministic dimensions.
         placeholder = (
             {}
@@ -361,7 +419,7 @@ class AgentTools:
             "purpose": args.purpose,
             "rework": [r.model_dump() for r in args.rework],
             "guide_id": "autonomous",
-            "guide_version": "1.0.0",
+            "guide_version": GUIDE_VERSION,
             "effective_guide_hash": capability["guide_hash"],
             "parameter_schema_hash": capability["parameter_schema_hash"],
             "template_hash": tool["template_hash"],
@@ -382,6 +440,9 @@ class AgentTools:
                 (normalized.get("prompt") or normalized.get("instruction") or "").encode()
             ).hexdigest(),
         }
+        if run.work_plan:
+            target = production_operation(run, args.operation_id, tool["id"].split(".")[0])
+            metadata.update(operation_key=target["operation_key"], target_requirement_ids=target["requirement_ids"])
         return tool, normalized, refs, metadata, dimensions
 
     async def preview_creation(self, run, call, args, version):
@@ -401,11 +462,13 @@ class AgentTools:
         )
 
     async def invoke_creation(self, run, call, args, version):
+        require_scope_ready(run)
         async with self.db.session() as session:
             existing = await session.scalar(select(Task).where(Task.agent_call_id == call.id))
             if existing:
                 return await self.creation_result(session, existing)
             old_plan = await session.get(Plan, (call.plan_id, 1)) if call.plan_id else None
+        production_operation(run, args.operation_id)
         if old_plan:
             plan = row_dict(old_plan)
         else:
@@ -561,6 +624,7 @@ class AgentTools:
             args.items
         ):
             raise AppError("plan_ids", "要求和计划项标识不能重复。")
+        requirements = {requirement.id for requirement in args.requirements}
         async with self.db.transaction() as session:
             run = await require_running(session, run.id, version)
             wrote_document = await session.scalar(
@@ -573,7 +637,47 @@ class AgentTools:
                 or run.work_plan.get("output_type") != args.output_type
             ):
                 raise AppError("goal_frozen", "已执行创作后不能更换目标要求、标识或输出类型。", 409)
-            run.work_plan = {**args.model_dump(), "revision": run.work_plan.get("revision", 0) + 1}
+            old_operations = production_operations(run)
+            plan = args.model_dump()
+            if "creation_targets" in args.model_fields_set:
+                proposed = [
+                    {**target, "operation_key": operation_key(run.id, target["id"])}
+                    for target in plan["creation_targets"]
+                ]
+            else:
+                plan["creation_targets"] = run.work_plan.get("creation_targets", [])
+                proposed = old_operations
+            target_ids = {target["id"] for target in proposed}
+            if len(target_ids) != len(proposed) or any(
+                len(set(target["requirement_ids"])) != len(target["requirement_ids"])
+                or not set(target["requirement_ids"]).issubset(requirements)
+                for target in proposed
+            ):
+                raise AppError("creation_targets", "生产目标身份必须唯一，且只能绑定已声明的目标要求。", 409)
+            locked = run.work_plan.get("operations_frozen", False) or bool(await session.scalar(
+                select(Task.id).where(Task.agent_run_id == run.id).limit(1)
+            ))
+            if locked:
+                # Compatibility for v1.0 plans, which had no separate targets.
+                if not proposed and any(item.get("media_type") is None for item in old_operations):
+                    proposed = old_operations
+                old_by_id = {item["id"]: item for item in old_operations}
+                if set(old_by_id) != {item["id"] for item in proposed} or any(
+                    old_by_id[item["id"]].get("media_type") not in (None, item.get("media_type"))
+                    or set(old_by_id[item["id"]]["requirement_ids"]) != set(item["requirement_ids"])
+                    or old_by_id[item["id"]]["text"] != item["text"]
+                    for item in proposed if item["id"] in old_by_id
+                ):
+                    raise AppError(
+                        "creation_targets_frozen",
+                        "生产已经开始，不能新增、改名或重绑生产目标以取得新执行身份。可自由调整计划步骤、说明、工具和参数；重做沿用原目标并关联返工证据。",
+                        409,
+                        {"existing_creation_targets": old_operations},
+                    )
+            run.work_plan = {
+                **plan, "revision": run.work_plan.get("revision", 0) + 1,
+                "production_operations": proposed, "operations_frozen": locked,
+            }
             run.intent = "creation"
             record_event(session, "agent.updated", run.project_id, run.id)
             return success(run.work_plan)

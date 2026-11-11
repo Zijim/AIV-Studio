@@ -79,9 +79,10 @@ class PlanService:
             values.pop(key, None)
         async with self.db.transaction() as session:
             if agent_run_id:
-                from .creative_agent_scope import require_running, scoped_asset
+                from .creative_agent_scope import require_running, require_scope_ready, scoped_asset
                 from .models import CreativeAgentCall
                 run = await require_running(session, agent_run_id, control_version)
+                require_scope_ready(run)
                 call = await session.get(CreativeAgentCall, agent_call_id)
                 if not call or call.run_id != run.id or run.project_id != project_id:
                     raise AppError("agent_owner", "创作调用归属不一致。", 409)
@@ -279,9 +280,10 @@ class PlanService:
             conversation = await resolve_conversation(session, plan.project_id, plan.conversation_id, writable=True)
             if plan.agent_run_id:
                 from .creative_agent_policy import reserve_execution
-                from .creative_agent_scope import require_running, scoped_asset
+                from .creative_agent_scope import require_running, require_scope_ready, scoped_asset
                 from .models import CreativeAgentCall
                 run = await require_running(session, plan.agent_run_id, control_version)
+                require_scope_ready(run)
                 call = await session.get(CreativeAgentCall, agent_call_id) if agent_call_id else None
                 if not call or call.run_id != run.id or call.plan_id != plan.id:
                     raise AppError("agent_owner", "自主创作方案仅能由所属 Run 提交。", 409)

@@ -26,6 +26,7 @@ const states: Record<string, string> = {
   failed: "执行失败",
 };
 const toolNames: Record<string, string> = {
+  set_resource_scope: "确认本次素材范围",
   get_project_context: "了解创作背景",
   search_resources: "查找已开放素材",
   read_resource: "阅读素材",

@@ -104,10 +104,19 @@ class Registry:
             else float(params["aspect_ratio"].split(":")[0]) / float(params["aspect_ratio"].split(":")[1])
         )
         pixels = params["megapixels"] * 1024**2
-        width = max(32, round(math.sqrt(pixels * ratio) / 32) * 32)
-        height = max(32, round(math.sqrt(pixels / ratio) / 32) * 32)
-        if width * height > settings.video_max_pixels:
-            raise AppError("resource_limit", "对齐后的实际视频面积超过资源上限。")
+        width_units = math.sqrt(pixels * ratio) / 32
+        height_units = math.sqrt(pixels / ratio) / 32
+        width, height = max(1, round(width_units)) * 32, max(1, round(height_units)) * 32
+        max_pixels = settings.video_max_pixels
+        if pixels <= max_pixels < width * height:
+            # A target inside the cap can round up past it on the 32-pixel grid.
+            width, height = max(1, math.floor(width_units)) * 32, max(1, math.floor(height_units)) * 32
+        if width * height > max_pixels:
+            raise AppError(
+                "resource_limit",
+                f"对齐后的视频尺寸为{width}×{height}，面积超过{max_pixels}像素上限。请降低目标像素（MP）。",
+                details={"width": width, "height": height, "max_pixels": max_pixels},
+            )
         frames = max(5, round(params["duration_seconds"] * 24))
         frames += (5 - frames % 17) % 17
         if frames > settings.video_max_frames:

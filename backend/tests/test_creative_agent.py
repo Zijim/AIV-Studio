@@ -18,7 +18,7 @@ from sqlalchemy import func, select, text
 
 from app.config import ROOT, Settings
 from app.creative_agent import CreativeAgent
-from app.creative_agent_schema import Creation, Inspect, Search, StartRun
+from app.creative_agent_schema import Creation, Inspect, ResourceScope, Search, StartRun
 from app.creative_agent_scope import protect_active, scoped_asset
 from app.db import Database
 from app.errors import AppError
@@ -59,10 +59,13 @@ def plan(kind="image"):
         "output_type": kind,
         "requirements": [{"id": "subject", "text": "创作目标中的主体"}],
         "items": [{"id": "main", "text": "创作并检查主体"}],
+        "creation_targets": [] if kind == "text" else [
+            {"id": "main", "text": "目标主体成果", "media_type": kind, "requirement_ids": ["subject"]},
+        ],
     }
 
 
-class CreativeAgentTests(unittest.IsolatedAsyncioTestCase):
+class AgentTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -106,11 +109,22 @@ class CreativeAgentTests(unittest.IsolatedAsyncioTestCase):
             await s.flush()
             self.pid, self.cid = project.id, conversation.id
 
-    async def start(self, content="生成一张图片", **kwargs):
+    async def start(self, content="生成一张图片", *, resolve_scope=True, **kwargs):
         data = await self.agent.start_run(
             self.pid, StartRun(conversation_id=self.cid, content=content, idempotency_key=uid(), **kwargs)
         )
-        return data["run_id"]
+        rid = data["run_id"]
+        if resolve_scope:
+            # Most existing tests exercise later runtime stages. Scope-specific
+            # tests use the real first native decision with resolve_scope=False.
+            async with self.db.transaction() as session:
+                (await session.get(CreativeAgentRun, rid)).state = "running"
+            await self.agent.tools.set_resource_scope(
+                await self.run_record(rid), SimpleNamespace(id=uid()), ResourceScope(mode="available"), 1
+            )
+            async with self.db.transaction() as session:
+                (await session.get(CreativeAgentRun, rid)).state = "queued"
+        return rid
 
     async def run_record(self, rid):
         async with self.db.session() as s:
@@ -168,6 +182,7 @@ class CreativeAgentTests(unittest.IsolatedAsyncioTestCase):
             (await s.get(ProjectAsset, (self.pid, aid))).curated_at = "2026-11-10"
         return aid
 
+class CreativeAgentTests(AgentTestCase):
     async def test_document_delivery_uses_real_saved_content_and_no_consumption_accounting(self):
         requests = []
 
@@ -538,6 +553,14 @@ class CreativeAgentTests(unittest.IsolatedAsyncioTestCase):
         run = await self.run_record(rid)
         self.assertEqual(count, 4)
         self.assertEqual(run.stop_reason["code"], "no_progress")
+        resumed = await self.agent.control(rid, "resume", run.control_version)
+        self.assertEqual(resumed["no_progress"], 0)
+        for key in ("model_count", "tool_count", "execution_count", "issues", "limits"):
+            self.assertEqual(resumed[key], getattr(run, key))
+        await self.agent.drive(rid)
+        stopped_again = await self.run_record(rid)
+        self.assertEqual(count, 4 + run.limits["no_progress"])
+        self.assertEqual(stopped_again.stop_reason["code"], "no_progress")
 
     async def test_followup_preserves_assistant_discussion_without_opening_old_material(self):
         async def discussion(request):
@@ -673,6 +696,9 @@ class CreativeAgentTests(unittest.IsolatedAsyncioTestCase):
             if count == 1:
                 p = plan()
                 p["items"].append({"id": "extra", "text": "第二批"})
+                p["creation_targets"].append({
+                    "id": "extra", "text": "第二批候选", "media_type": "image", "requirement_ids": ["subject"],
+                })
                 return response(("p", "update_plan", p))
             if count in (2, 3):
                 return response(

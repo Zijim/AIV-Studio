@@ -1,11 +1,44 @@
 """Authoritative execution and rework accounting (not monetary accounting)."""
 
 from copy import deepcopy
+from uuid import NAMESPACE_URL, uuid5
 
 from sqlalchemy import exists, select
 
+from .creative_agent_scope import require_scope_ready
 from .errors import AppError
-from .models import Asset, CreativeAgentCall, CreativeAgentRun, CreativeAgentStep, Execution, Task, record_event
+from .models import Asset, CreativeAgentCall, CreativeAgentRun, CreativeAgentStep, Execution, Plan, Task, record_event
+
+
+def operation_key(run_id, target_id):
+    return str(uuid5(NAMESPACE_URL, f"creative-agent-operation:{run_id}:{target_id}"))
+
+
+def production_operations(run):
+    if "production_operations" in run.work_plan:
+        return run.work_plan["production_operations"]
+    targets = run.work_plan.get("creation_targets")
+    if targets is None:  # Already-started v1.0 Runs retain their original identities.
+        targets = [
+            {**item, "media_type": None, "requirement_ids": [r["id"] for r in run.work_plan.get("requirements", [])]}
+            for item in run.work_plan.get("items", [])
+        ]
+    return [{**target, "operation_key": operation_key(run.id, target["id"])} for target in targets]
+
+
+def production_operation(run, target_id, media_type=None):
+    targets = production_operations(run)
+    target = next((item for item in targets if item["id"] == target_id), None)
+    if not target:
+        raise AppError(
+            "operation_identity",
+            "operation_id 必须引用已声明的生产目标；计划步骤改名或增加检查步骤不会创建新的生产身份。",
+            409,
+            {"available_creation_targets": targets},
+        )
+    if media_type and target.get("media_type") not in (None, media_type):
+        raise AppError("operation_type", "创作能力输出类型与该生产目标不一致，请使用对应的稳定目标身份。", 409)
+    return target
 
 
 async def consumed_evidence(session, run, call_id, asset_id, *, media=False):
@@ -64,6 +97,7 @@ async def reserve_execution(session, run, call, count):
     import json
 
     args = json.loads(call.arguments)
+    require_scope_ready(run)
     unknown = await session.scalar(
         select(Task.id).where(Task.agent_run_id == run.id, Task.state == "needs_attention").limit(1)
     )
@@ -74,13 +108,20 @@ async def reserve_execution(session, run, call, count):
             409,
             {"task_id": unknown},
         )
-    if not run.work_plan or args["operation_id"] not in {i["id"] for i in run.work_plan.get("items", [])}:
+    if not run.work_plan:
         raise AppError(
             "plan_required",
-            "operation_id 必须逐字使用 update_plan.items 中已有的 id，不是新操作名称。",
+            "请先声明目标要求、计划和 creation_targets，再提交创作。",
             409,
-            {"available_operation_ids": [i["id"] for i in run.work_plan.get("items", [])]},
         )
+    plan = await session.get(Plan, (call.plan_id, 1)) if call.plan_id else None
+    operation = production_operation(run, args["operation_id"], plan.tool_id.split(".")[0] if plan else None)
+    if plan:
+        metadata = plan.prompt_metadata or {}
+        bound_key = metadata.get("operation_key")
+        legacy = metadata.get("guide_version") == "1.0.0"
+        if bound_key != operation["operation_key"] and not (legacy and bound_key is None):
+            raise AppError("operation_changed", "冻结方案的生产身份与当前声明不一致，请按原操作核对。", 409)
     if run.execution_count + count > run.limits["executions"]:
         raise AppError("execution_limit", "本次创作执行次数已达上限，请保留成果并说明未完成项。", 409)
     # Counter identity is a frozen requirement, independent of problem wording,
@@ -92,23 +133,27 @@ async def reserve_execution(session, run, call, count):
         raise AppError("rework_duplicate", "返工关联要求不能重复。")
     for ref in refs:
         rid = ref["requirement_id"]
-        if rid not in requirement_ids:
-            raise AppError("rework_requirement", "返工必须关联已有目标要求。")
+        if rid not in requirement_ids or rid not in operation["requirement_ids"]:
+            raise AppError("rework_requirement", "返工必须关联该生产目标绑定的原始要求。")
         _, evidence = await consumed_evidence(session, run, ref["evidence_call_id"], ref["source_asset_id"], media=True)
-        source = await session.scalar(
-            select(Asset)
+        source = (await session.execute(
+            select(Asset, Task)
             .join(Execution, Execution.id == Asset.execution_id)
             .join(Task, Task.id == Execution.task_id)
             .where(Asset.id == ref["source_asset_id"], Task.agent_run_id == run.id)
-        )
+        )).first()
         if not source or not evidence.get("frames") or evidence.get("technical", {}).get("decode") == "failed":
             raise AppError("rework_source", "返工必须基于本次真实产物的画面观察，不能基于推测或检测故障。")
+        source_call = await session.get(CreativeAgentCall, source[1].agent_call_id)
+        source_identity = json.loads(source_call.arguments)["operation_id"] if source_call else None
+        if not source_identity or operation_key(run.id, source_identity) != operation["operation_key"]:
+            raise AppError("rework_identity", "返工必须沿用原产物所属的生产目标身份，不能借其他产物的证据重开操作。", 409)
         issue = issues.setdefault(rid, {"count": 0, "history": []})
         if issue["count"] + count > run.limits["issue_reworks"]:
             raise AppError("rework_limit", "该要求的问题返工次数已达上限，换工具或描述不能重置。", 409)
         issue["count"] += count
         issue["history"] = [*issue["history"], {**ref, "call_id": call.call_id, "executions": count}]
-    # Explicitly retrying the same plan item is rework, even with a new tool or seed.
+    # Use the frozen production identity, never the editable display-plan item.
     previous = (
         await session.scalars(
             select(CreativeAgentCall)
@@ -121,9 +166,14 @@ async def reserve_execution(session, run, call, count):
             )
         )
     ).all()
-    if any(json.loads(p.arguments).get("operation_id") == args["operation_id"] for p in previous) and not refs:
-        raise AppError("rework_evidence_required", "同一计划项再次生成需要明确问题及观察证据。", 409)
+    if any(
+        operation_key(run.id, json.loads(p.arguments)["operation_id"]) == operation["operation_key"] for p in previous
+    ) and not refs:
+        raise AppError("rework_evidence_required", "该生产目标已执行，再次生成需要关联原问题及真实观察证据。", 409)
     run.issues = issues
+    run.work_plan = {
+        **run.work_plan, "production_operations": production_operations(run), "operations_frozen": True,
+    }
     run.execution_count += count
     run.intent = "creation"
 

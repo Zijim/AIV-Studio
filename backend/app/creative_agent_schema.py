@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import Field
 
 from .agent_routing import CreativeBrief
+from .prompt_composition import VideoDocument
 from .schemas import InputRef, StrictModel
 
 
@@ -37,6 +38,15 @@ class Context(StrictModel):
         le=1,
         description="Read one complete prior conversation message on demand. No truncation; old media outputs still need explicit references.",
     )
+
+
+class ResourceScope(StrictModel):
+    mode: Literal["available", "selected_only", "none", "only"]
+    only_asset_ids: list[str] = Field(default_factory=list, max_length=100)
+    only_names: list[str] = Field(default_factory=list, max_length=100)
+    exclude_asset_ids: list[str] = Field(default_factory=list, max_length=100)
+    exclude_names: list[str] = Field(default_factory=list, max_length=100)
+    user_quote: str = Field(default="", max_length=4000)
 
 
 class Search(StrictModel):
@@ -82,6 +92,15 @@ class Rework(StrictModel):
     reason: str = Field(min_length=1, max_length=1200)
 
 
+class AutonomousVideoDocument(VideoDocument):
+    style_description: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=1500,
+        description="Optional visual style, compiled into the first shot description.",
+    )
+
+
 class Creation(Capability):
     inputs: list[InputRef] = Field(default_factory=list, max_length=9)
     parameters: dict = Field(default_factory=dict)
@@ -90,7 +109,7 @@ class Creation(Capability):
     operation_id: str = Field(
         min_length=1,
         max_length=80,
-        description="Copy an existing update_plan.items[].id exactly (e.g. p2). Not a new operation name. Repeated generation of that item needs rework evidence.",
+        description="Copy a stable update_plan.creation_targets[].id. These production identities are frozen after execution starts, independently of editable plan item IDs. Repeating one requires rework evidence.",
     )
     candidate_count: int = Field(default=1, ge=1, le=4)
     based_on_asset_id: str | None = None
@@ -119,10 +138,20 @@ class PlanItem(Requirement):
     state: Literal["pending", "running", "completed"] = "pending"
 
 
+class CreationTarget(Requirement):
+    media_type: Literal["image", "video", "audio"]
+    requirement_ids: list[str] = Field(min_length=1, max_length=30)
+
+
 class WorkPlan(StrictModel):
     output_type: Literal["image", "video", "audio", "text"]
     requirements: list[Requirement] = Field(min_length=1, max_length=30)
     items: list[PlanItem] = Field(min_length=1, max_length=30)
+    creation_targets: list[CreationTarget] = Field(
+        default_factory=list,
+        max_length=30,
+        description="Declare stable identities for production outputs, including intermediates, before first generation. Omit this field to keep existing targets when updating the plan. Targets are frozen after production starts. Text-only work needs none.",
+    )
     note: str = Field(default="", max_length=2000)
 
 
@@ -151,6 +180,10 @@ class Finish(StrictModel):
 
 
 TOOL_MODELS = {
+    "set_resource_scope": (
+        ResourceScope,
+        "Before any material metadata or content is disclosed, interpret the user's material restrictions and seal this Run's reference scope. available respects the user's key-assets switch; selected_only excludes keys; none uses no existing materials; only selects explicit IDs/names. Exclusions always win. Names must occur literally in user instructions. Cannot widen or later replace a sealed scope. Run outputs remain available.",
+    ),
     "get_project_context": (
         Context,
         "Read current goal, original constraints and permitted material metadata. Read bounded conversation history on demand; history never grants material access.",

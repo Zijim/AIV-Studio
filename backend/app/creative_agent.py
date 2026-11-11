@@ -104,6 +104,7 @@ class CreativeAgent:
                     "selected": selected,
                     "use_key_assets": request.use_key_assets,
                     "image_roles": {k: v for k, v in request.image_roles.items() if k in selected},
+                    "reference_policy": {"state": "pending"},
                 },
                 access={"public_access": public_access, "can_manage": not public_access},
                 limits={
@@ -795,6 +796,8 @@ class CreativeAgent:
                     if waiting
                     else "queued"
                 )
+                if (run.stop_reason or {}).get("code") == "no_progress":
+                    run.no_progress = 0
                 run.stop_reason = None
             elif action == "cancel":
                 run.state = "cancelling"
@@ -844,6 +847,21 @@ class CreativeAgent:
                 **run.scope,
                 "selected": list(dict.fromkeys([*run.scope["selected"], *request.selected_asset_ids])),
             }
+            # A requested answer is a new explicit user grant, never a reason
+            # to reopen the key-assets collection or other prior references.
+            if request.selected_asset_ids:
+                policy = dict(run.scope.get("reference_policy", {}))
+                if policy.get("mode") in ("none", "only"):
+                    policy.update(
+                        mode="only",
+                        only_asset_ids=list(dict.fromkeys([
+                            *policy.get("only_asset_ids", []), *request.selected_asset_ids,
+                        ])),
+                    )
+                policy["excluded_asset_ids"] = [
+                    aid for aid in policy.get("excluded_asset_ids", []) if aid not in request.selected_asset_ids
+                ]
+                run.scope = {**run.scope, "reference_policy": policy}
             entry = {
                 "call_id": call.call_id,
                 "question": question["question"],
