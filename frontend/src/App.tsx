@@ -70,6 +70,7 @@ import {
 import { Button, Empty, Modal } from "./components/ui";
 import { ConversationSwitcher } from "./components/ConversationSwitcher";
 import { AutonomousAssistant } from "./components/AutonomousAssistant";
+import { ChatMessage } from "./components/ChatMessage";
 import { ProgressiveImage } from "./components/ProgressiveImage";
 import { TaskQueue, TaskAssetPreview } from "./components/TaskQueue";
 import {
@@ -2289,16 +2290,12 @@ export default function App() {
                     </div>
                   )}
                 {chatMessages.map((m) => (
-                  <div key={m.id} className={`chat-message ${m.role}`}>
-                    <span className="message-role">
-                      {m.role === "user"
-                        ? "你"
-                        : m.role === "assistant"
-                          ? "映作"
-                          : "任务记录"}{" "}
-                      <small>{clock(m.created_at)}</small>
-                    </span>
-                    <p>{m.content}</p>
+                  <ChatMessage
+                    key={m.id}
+                    role={m.role}
+                    content={m.content}
+                    createdAt={m.created_at}
+                  >
                     {!!m.details?.vision_images?.length && (
                       <div className="message-images">
                         {m.details.vision_images.map((image: Data) => (
@@ -2314,10 +2311,11 @@ export default function App() {
                       </div>
                     )}
                     {!!m.details?.visual_observations?.length && (
-                      <details className="visual-observations">
+                      <details className="visual-observations message-details">
                         <summary>
                           模型图片观察 · {m.details.visual_observations.length}{" "}
                           张
+                          <ChevronDown size={13} aria-hidden="true" />
                         </summary>
                         {m.details.visual_observations.map((item: Data) => (
                           <div key={item.asset_id}>
@@ -2336,7 +2334,7 @@ export default function App() {
                         ))}
                       </details>
                     )}
-                  </div>
+                  </ChatMessage>
                 ))}
                 {(busy === "message" || planningTurn) && (
                   <div className="thinking">

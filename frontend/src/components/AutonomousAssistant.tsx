@@ -1,15 +1,22 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowDownToLine,
   ArrowUp,
   Check,
+  ChevronDown,
+  Copy,
+  FileText,
+  Link2,
   LoaderCircle,
+  Maximize2,
   Pause,
   Play,
   Square,
   X,
 } from "lucide-react";
 import { api, type Data, messageSchema, useWorkspace } from "../lib";
+import { ChatMessage } from "./ChatMessage";
 import { Button } from "./ui";
 
 const terminal = ["completed", "cancelled", "failed"];
@@ -162,15 +169,12 @@ export function AutonomousAssistant({
           </p>
         )}
         {messages.map((m) => (
-          <div className={`message ${m.role}`} key={m.id}>
-            <small>
-              {m.role === "user"
-                ? "你"
-                : m.role === "assistant"
-                  ? "创作助手"
-                  : "执行记录"}
-            </small>
-            <p className="agent-message-text">{m.content}</p>
+          <ChatMessage
+            key={m.id}
+            role={m.role}
+            content={m.content}
+            createdAt={m.created_at}
+          >
             {!!m.details?.asset_ids?.length && (
               <div className="agent-deliverables">
                 {m.details.asset_ids.map((id: string, i: number) => (
@@ -185,29 +189,38 @@ export function AutonomousAssistant({
               </div>
             )}
             {!!m.details?.checks?.length && (
-              <details>
-                <summary>目标检查依据</summary>
-                {m.details.checks.map((check: Data, i: number) => (
-                  <p key={i}>
-                    {check.observation}
-                    <small> · {check.coverage}</small>
-                  </p>
-                ))}
+              <details className="message-details">
+                <summary>
+                  目标检查依据 <ChevronDown size={13} aria-hidden="true" />
+                </summary>
+                <div className="message-details-content">
+                  {m.details.checks.map((check: Data, i: number) => (
+                    <p key={i}>
+                      {check.observation}
+                      {check.coverage && <small>{check.coverage}</small>}
+                    </p>
+                  ))}
+                </div>
               </details>
             )}
             {!!m.details?.limitations?.length && (
-              <details>
-                <summary>检查范围与限制</summary>
-                {m.details.limitations.map((text: string, i: number) => (
-                  <p key={i}>{text}</p>
-                ))}
+              <details className="message-details">
+                <summary>
+                  检查范围与限制 <ChevronDown size={13} aria-hidden="true" />
+                </summary>
+                <div className="message-details-content">
+                  {m.details.limitations.map((text: string, i: number) => (
+                    <p key={i}>{text}</p>
+                  ))}
+                </div>
               </details>
             )}
-          </div>
+          </ChatMessage>
         ))}
         {run && (
           <section
             className="agent-run-card"
+            data-state={run.state}
             aria-label="自主创作状态"
             aria-live="polite"
           >
@@ -284,8 +297,11 @@ export function AutonomousAssistant({
               <small>已提交的生成继续保存；恢复后 Agent 才继续推进。</small>
             )}
             {!!calls.length && (
-              <details className="agent-activity">
-                <summary>查看执行活动 · {calls.length}</summary>
+              <details className="agent-activity message-details">
+                <summary>
+                  查看执行活动 · {calls.length}
+                  <ChevronDown size={13} aria-hidden="true" />
+                </summary>
                 {calls.map((call) => (
                   <div key={call.id}>
                     <span>{toolNames[call.name] ?? call.name}</span>
@@ -461,16 +477,30 @@ function AgentArtifact({
     queryFn: () => api(`/assets/${id}`),
   });
   const value = asset.data;
+  const name = value?.name || `成果 ${index + 1}`;
+  const openLabel = `查看${value?.media_type === "text" ? "文档" : "成果"} ${index + 1}`;
   const referenced = useWorkspace((s) => s.selected.includes(id));
   return (
     <div className="agent-artifact">
       {value?.media_type === "image" && (
-        <img
-          src={value.preview_url ?? value.content_url}
-          alt={value.name}
-          loading="lazy"
+        <button
+          className="agent-artifact-preview"
+          type="button"
+          aria-label={`预览${name}`}
           onClick={() => onOpen(id)}
-        />
+        >
+          <img
+            src={value.preview_url ?? value.content_url}
+            alt={name}
+            width={value.media_info?.width}
+            height={value.media_info?.height}
+            loading="lazy"
+            decoding="async"
+          />
+          <span className="agent-artifact-expand" aria-hidden="true">
+            <Maximize2 size={13} />
+          </span>
+        </button>
       )}
       {value?.media_type === "video" && (
         <video
@@ -478,27 +508,49 @@ function AgentArtifact({
           poster={value.preview_url}
           controls
           preload="metadata"
+          aria-label={name}
         />
       )}
       {value?.media_type === "text" && (
-        <details>
-          <summary>{value.name}</summary>
-          <pre>{value.media_info.text_preview}</pre>
+        <details className="agent-artifact-document">
+          <summary>
+            <FileText size={15} aria-hidden="true" />
+            <span>{name}</span>
+            <ChevronDown size={13} aria-hidden="true" />
+          </summary>
+          <pre>{value.media_info?.text_preview}</pre>
         </details>
       )}
-      <div>
+      {asset.isPending && (
+        <div className="agent-artifact-status" role="status">
+          <LoaderCircle size={14} className="spin" aria-hidden="true" />
+          正在加载成果…
+        </div>
+      )}
+      {asset.isError && (
+        <div className="agent-artifact-status">成果预览暂不可用</div>
+      )}
+      <div className="agent-artifact-actions">
         <Button
+          className="agent-artifact-reference"
           type="button"
           aria-pressed={referenced}
           onClick={() => useWorkspace.getState().chooseAsset(id, true)}
         >
+          {referenced ? (
+            <Check size={13} aria-hidden="true" />
+          ) : (
+            <Link2 size={13} aria-hidden="true" />
+          )}
           {referenced ? "已引用" : "引用此成果"}
         </Button>
-        <Button onClick={() => onOpen(id)}>
-          查看{value?.media_type === "text" ? "文档" : "成果"} {index + 1}
+        <Button type="button" aria-label={openLabel} onClick={() => onOpen(id)}>
+          <Maximize2 size={12} aria-hidden="true" />
+          查看
         </Button>
         {value?.media_type === "text" && (
           <Button
+            type="button"
             onClick={async () => {
               try {
                 const response = await fetch(`/api/v1/assets/${id}/content`);
@@ -509,10 +561,16 @@ function AgentArtifact({
               }
             }}
           >
+            <Copy size={13} aria-hidden="true" />
             复制正文
           </Button>
         )}
-        <a href={`/api/v1/assets/${id}/content?download=true`} download>
+        <a
+          className="btn"
+          href={`/api/v1/assets/${id}/content?download=true`}
+          download
+        >
+          <ArrowDownToLine size={13} aria-hidden="true" />
           下载
         </a>
       </div>
