@@ -18,7 +18,7 @@ from sqlalchemy import func, select, text
 
 from app.config import ROOT, Settings
 from app.creative_agent import CreativeAgent
-from app.creative_agent_schema import Creation, Inspect, ResourceScope, Search, StartRun
+from app.creative_agent_schema import Answer, Creation, Inspect, ResourceScope, Search, StartRun
 from app.creative_agent_scope import protect_active, scoped_asset
 from app.db import Database
 from app.errors import AppError
@@ -458,6 +458,97 @@ class CreativeAgentTests(AgentTestCase):
         async with self.db.session() as s:
             self.assertEqual(await s.scalar(select(func.count()).select_from(Task)), 0)
 
+    async def test_video_dialogue_locks_survive_failed_preview_and_restart(self):
+        first_line, second_line = "我们出发吧", "天黑前回来"
+        user_lines = [{"kind": "dialogue", "text": line} for line in (first_line, second_line)]
+        first_tag, second_tag = (f"<d>[Chinese] {line}</d>" for line in (first_line, second_line))
+        video_plan = plan("video")
+        video_plan["creation_targets"].append(
+            {"id": "cutaway", "text": "独立的环境镜头", "media_type": "video", "requirement_ids": ["subject"]}
+        )
+
+        def video_args(description, *, operation_id="main", literals=None):
+            args = {
+                "capability_id": "video.generate.minimax_t2v",
+                "operation_id": operation_id,
+                "purpose": "制作短视频",
+                "parameters": {"duration_seconds": 5, "aspect_ratio": "16:9"},
+                "prompt_document": {
+                    "shots": [{"index": 1, "description": description}],
+                    "overall_soundscape": "Wind",
+                    "non_diegetic_music": "N/A",
+                },
+            }
+            if literals is not None:
+                args["creative_brief"] = {"literal_texts": literals}
+            return args
+
+        rid = await self.start(f"制作短视频，第一句说“{first_line}”，第二句需要我补充。")
+
+        async def initial_provider(request):
+            calls = await self.calls(rid)
+            if not calls:
+                return response(("question", "ask_user", {"question": "第二句是什么？", "reason": "缺少指定台词"}))
+            if len(calls) == 1:
+                return response(
+                    ("plan", "update_plan", video_plan),
+                    ("plain", "preview_creation", video_args(f"He says {first_line}. {second_tag}", literals=user_lines)),
+                )
+            return response(("stop", "finish_run", {"kind": "needs_attention", "message": "对白格式需要修正。"}))
+
+        self.agent.provider = initial_provider
+        await self.agent.drive(rid)
+        await self.agent.answer(rid, Answer(call_id="question", answer=second_line, control_version=1, idempotency_key=uid()))
+        await self.agent.drive(rid)
+        run = await self.run_record(rid)
+        self.assertEqual(run.state, "needs_attention")
+        self.assertEqual(run.dialogue_locks, {"main": user_lines})
+        self.assertEqual(run.execution_count, 0)
+        plain = next(call.result["error"] for call in await self.calls(rid) if call.call_id == "plain")
+        self.assertEqual(plain["code"], "dialogue_validation")
+        self.assertEqual(plain["details"]["unformatted"], [first_line])
+
+        recovered = CreativeAgent(self.state)
+        self.addAsyncCleanup(recovered.stop)
+        await recovered.recover()
+        await recovered.control(rid, "resume", run.control_version)
+        generated = video_args(f"The traveler (S1) says {first_tag} and then {second_tag}.")
+
+        async def recovered_provider(request):
+            calls = {call.call_id: call.result for call in await self.calls(rid)}
+            if "generate" not in calls:
+                current = json.loads(request["input"][0]["content"])["current"]
+                self.assertEqual(current["dialogue_locks"], {"main": user_lines})
+                self.assertIn("<d>[Chinese]", request["instructions"])
+                return response(
+                    ("missing", "invoke_creation", video_args(f"The traveler (S1) says {second_tag}.")),
+                    ("duplicate", "preview_creation", video_args(
+                        f"{first_tag} {first_tag} {second_tag}", literals=[user_lines[0], *user_lines]
+                    )),
+                    ("cutaway", "preview_creation", video_args(
+                        "A voice (S1) says <d>[Chinese] 海风很轻</d>.",
+                        operation_id="cutaway",
+                        literals=[{"kind": "dialogue", "text": "海风很轻"}],
+                    )),
+                    ("preview", "preview_creation", generated),
+                    ("generate", "invoke_creation", generated),
+                )
+            return response(("wait", "wait_for_tasks", {"task_ids": [calls["generate"]["data"]["task_id"]]}))
+
+        recovered.provider = recovered_provider
+        await recovered.drive(rid)
+        calls = {call.call_id: call.result for call in await self.calls(rid)}
+        self.assertEqual(calls["missing"]["error"]["details"]["missing"], [first_line])
+        self.assertEqual(calls["duplicate"]["error"]["details"]["duplicate"], [first_line])
+        self.assertTrue(calls["cutaway"]["ok"], calls["cutaway"])
+        self.assertIn(first_tag, calls["preview"]["data"]["resolved"]["prompt"])
+        self.assertEqual(calls["generate"]["data"]["metadata"]["creative_brief"]["literal_texts"], user_lines)
+        run = await self.run_record(rid)
+        self.assertEqual(run.dialogue_locks, {"main": user_lines})
+        self.assertEqual(run.execution_count, 1)
+        async with self.db.session() as s:
+            self.assertEqual(await s.scalar(select(func.count()).select_from(Task)), 1)
+
     async def test_qwen_preview_and_submission_default_to_lightning(self):
         rid = await self.start("生成一张写实的灭霸照片")
         args = {
@@ -512,8 +603,6 @@ class CreativeAgentTests(AgentTestCase):
         self.assertEqual(result["data"]["resolved"]["preset"], "quality")
 
     async def test_necessary_answer_is_paired_idempotent_and_cannot_be_free_input(self):
-        from app.creative_agent_schema import Answer
-
         requests = 0
 
         async def provider(request):
@@ -1272,7 +1361,7 @@ class MigrationTests(unittest.TestCase):
                     ("旧对话", "assisted"),
                 )
                 self.assertEqual(
-                    connection.execute("SELECT version_num FROM alembic_version").fetchone()[0], "e92a5b8c3100"
+                    connection.execute("SELECT version_num FROM alembic_version").fetchone()[0], "f41b2c8d9a30"
                 )
                 self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
             self.assertEqual(len(list((Path(directory) / "backups").glob("before-migration-*.sqlite3"))), 1)

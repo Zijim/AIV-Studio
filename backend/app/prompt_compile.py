@@ -1,13 +1,40 @@
 """Deterministic compilation and structural checks, not a visual quality score."""
 
 import re
+from collections import Counter
 
+from .errors import AppError
 from .prompt_guides import content_hash
 
 I2VA_INSTRUCTION = (
     "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced."
 )
 COMPILER_VERSION = "2.0.0"
+DIALOGUE_TAG = re.compile(r"<d>\[([^\]]+)\]\s?(.*?)</d>", re.S)
+
+
+def _dialogue_validation_error(document, body, dialogue, protected_dialogue):
+    expected = Counter(protected_dialogue)
+    actual = Counter(text for _, text in dialogue)
+    missing = expected - actual
+    outside = "\n".join((DIALOGUE_TAG.sub("", body), document.overall_soundscape, document.non_diegetic_music))
+    unformatted = [text for text in missing if text in outside]
+    problems = (
+        ("unformatted", "原句已写出但缺少镜头内的对白标签", unformatted),
+        ("missing", "镜头对白缺少原句或改写了原文", [text for text in missing if text not in unformatted]),
+        ("duplicate", "镜头对白重复了原句", [text for text in actual - expected if text in expected]),
+        ("unexpected", "镜头对白含有与锁定清单不匹配的句子", [text for text in actual if text not in expected]),
+    )
+    messages = [message for _, message, lines in problems if lines]
+    details = {key: [line[:200] for line in lines[:5]] for key, _, lines in problems if lines}
+    return AppError(
+        "dialogue_validation",
+        "。".join([
+            *messages,
+            "请在对应镜头的 description 中写 <d>[Language] 原台词</d>。中文填 Chinese，说话人和语气放在标签外。",
+        ]),
+        details={"field": "prompt_document.shots[].description", **details},
+    )
 
 
 def compile_document(tool_id, document, brief, resolved, bindings, *, autonomous=False):
@@ -72,13 +99,15 @@ def compile_document(tool_id, document, brief, resolved, bindings, *, autonomous
                 "推镜|拉镜|变焦|摇镜|横移镜头", body
             ):
                 raise ValueError("固定镜头正文含有相机运动，请修复或澄清")
-        dialogue = re.findall(r"<d>\[([^\]]+)\]\s?(.*?)</d>", body, re.S)
+        dialogue = DIALOGUE_TAG.findall(body)
         protected_dialogue = [item.text for item in brief.literal_texts if item.kind in ("dialogue", "lyrics")]
         if audio.silence and dialogue:
             raise ValueError("静音视频不能包含对白")
         if not autonomous and any(text not in protected_dialogue for _, text in dialogue):
             raise ValueError("正文新增或改写了用户未提供的台词/歌词")
         if protected_dialogue and sorted(text for _, text in dialogue) != sorted(protected_dialogue):
+            if autonomous:
+                raise _dialogue_validation_error(document, body, dialogue, protected_dialogue)
             raise ValueError("台词/歌词必须逐字保留且不得无故重复")
         sections = [
             {"label": "画面与动作", "text": body},

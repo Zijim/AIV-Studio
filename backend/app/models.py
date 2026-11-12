@@ -323,6 +323,7 @@ class CreativeAgentRun(Entity, Base):
     control_version: Mapped[int] = mapped_column(default=1)
     intent: Mapped[str] = mapped_column(default="undecided")
     work_plan: Mapped[dict] = mapped_column(JSON, default=dict)
+    dialogue_locks: Mapped[dict] = mapped_column(JSON, default=dict)
     issues: Mapped[dict] = mapped_column(JSON, default=dict)
     clarifications: Mapped[list] = mapped_column(JSON, default=list)
     deliverables: Mapped[list] = mapped_column(JSON, default=list)

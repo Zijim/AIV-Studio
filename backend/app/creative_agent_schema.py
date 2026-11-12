@@ -107,7 +107,16 @@ class Creation(Capability):
         default_factory=dict,
         description="Execution parameters. For image.generate.qwen use preset=fast (4-step Lightning LoRA) by default. When the user explicitly selects the 50-step quality preset, record preset=quality in creative_brief.requested_parameters.",
     )
-    prompt_document: dict | None = None
+    prompt_document: dict | None = Field(
+        default=None,
+        description=(
+            "For video, put spoken lines and lyrics in shots[].description as <d>[Language] exact words</d>, "
+            "for example <d>[Chinese] 我们出发吧</d>. Speaker IDs like (S1) and delivery cues go outside the tag. "
+            "Use <Subject 1> (S1) for a referenced speaker in Ref2VA. "
+            "Declare exact user-specified lines in creative_brief.literal_texts. "
+            "The Run retains verified lines for this operation_id across previews and retries."
+        ),
+    )
     purpose: str = Field(min_length=1, max_length=1200)
     operation_id: str = Field(
         min_length=1,

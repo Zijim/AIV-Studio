@@ -10,6 +10,7 @@ from uuid import NAMESPACE_URL, uuid5
 from pydantic import TypeAdapter
 from sqlalchemy import select
 
+from .agent_routing import LiteralText
 from .config import ROOT
 from .creative_agent_history import capture_history, history_page
 from .creative_agent_media import observe
@@ -42,7 +43,7 @@ from .prompt_guides import content_hash
 from .schemas import ExecutePlan, ManualPlan
 from .storage import atomic_json, file_hash
 
-GUIDE_VERSION = "1.1.0"
+GUIDE_VERSION = "1.2.0"
 QWEN_QUALITY_MENTION = re.compile(r"(?<!\d)50\s*(?:步|steps?\b)|质量(?:档|模式|预设)|\bquality\b", re.I)
 
 
@@ -166,6 +167,7 @@ class AgentTools:
                 "conversation_history": history,
                 "work_plan": run.work_plan,
                 "production_operations": production_operations(run),
+                "dialogue_locks": run.dialogue_locks,
                 "limits": run.limits,
                 "used": {
                     "executions": run.execution_count,
@@ -340,10 +342,38 @@ class AgentTools:
     async def get_capability(self, run, call, args, version):
         return success(self.capability(self.registry.get(args.capability_id, args.version)))
 
+    async def dialogue_brief(self, run, args):
+        brief = args.creative_brief
+        target_id = args.operation_id
+        locked = run.dialogue_locks.get(target_id, [])
+        sources = (run.goal_snapshot.get("original", run.goal), *(item["answer"] for item in run.clarifications))
+        declared = [
+            item for item in brief.literal_texts
+            if item.kind in ("dialogue", "lyrics") and item.text.strip() and any(item.text in text for text in sources)
+        ]
+        if declared:
+            # Commit before compiling so a rejected preview or submission retains the user's exact wording.
+            async with self.db.transaction() as session:
+                current = await require_running(session, run.id, run.control_version)
+                locked = current.dialogue_locks.get(target_id, [])
+                locked_texts = {item["text"] for item in locked}
+                additions = [item.model_dump() for item in declared if item.text not in locked_texts]
+                if additions:
+                    locked = [*locked, *additions]
+                    current.dialogue_locks = {**current.dialogue_locks, target_id: locked}
+        if not locked:
+            return brief
+        locked_texts = {item["text"] for item in locked}
+        literals = [item for item in brief.literal_texts if item.kind == "visible_text" or item.text not in locked_texts]
+        literals.extend(LiteralText.model_validate(item) for item in locked)
+        return brief.model_copy(update={"literal_texts": literals})
+
     async def prepare_creation(self, run, args):
         require_scope_ready(run)
         tool = self.registry.get(args.capability_id, args.version)
         capability = self.capability(tool)
+        target = production_operation(run, args.operation_id, tool["id"].split(".")[0]) if run.work_plan else None
+        brief = await self.dialogue_brief(run, args) if tool["category"] == "video" else args.creative_brief
         if any(k in args.parameters for k in ("prompt", "instruction", "negative_prompt")):
             raise AppError("prompt_authority", "正文只由 prompt_document 编译，不能同时写入 parameters。")
         if len({r.slot for r in args.inputs}) != len(args.inputs):
@@ -414,7 +444,7 @@ class AgentTools:
             }
             for i, ref in enumerate(refs, 1)
         ]
-        values, sections = compile_document(tool["id"], doc, args.creative_brief, normalized, bindings, autonomous=True)
+        values, sections = compile_document(tool["id"], doc, brief, normalized, bindings, autonomous=True)
         normalized.update(values)
         if tool["category"] == "video":
             for key in ("width", "height", "resolved_frames", "resolved_seconds"):
@@ -442,7 +472,7 @@ class AgentTools:
             "prompt_document": args.prompt_document,
             "sections": sections,
             "asset_binding_map": bindings,
-            "creative_brief": args.creative_brief.model_dump(),
+            "creative_brief": brief.model_dump(),
             "parameter_sources": {
                 k: "explicit_or_designed"
                 if k in parameters
@@ -455,8 +485,7 @@ class AgentTools:
                 (normalized.get("prompt") or normalized.get("instruction") or "").encode()
             ).hexdigest(),
         }
-        if run.work_plan:
-            target = production_operation(run, args.operation_id, tool["id"].split(".")[0])
+        if target:
             metadata.update(operation_key=target["operation_key"], target_requirement_ids=target["requirement_ids"])
         return tool, normalized, refs, metadata, dimensions
 
