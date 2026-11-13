@@ -68,6 +68,7 @@ ComfyUI 中已有外部任务时，本应用等待其队列清空。候选串行
 | 精细文生图 | 文生图qwen.json | Qwen Image，快速或质量 |
 | 图片编辑 | 图片编辑.json | 单图快速编辑 |
 | 参考图编辑 | 图片编辑qwen.json | 原图与参考图，Lightning 4步；新方案默认使用1.1.0，历史1.0.0保留40步 |
+| 局部编辑 | [局部编辑工作流](tool_registry/image.edit.qwen.local/1.0.0/source.workflow.json) | 原图与矩形选区，Lightning 4步遮罩补绘，按原图尺寸保存 |
 | 高清放大 | 图像高清放大.json | SeedVR2，检查实际最长边 |
 | 图片生成视频 | video_minimax_h3_i2v.json | FL2VA 权重，整张图片作为开场 |
 | 文字生成视频 | MiniMax_H3.json | FL2VA 权重，无图片输入 |

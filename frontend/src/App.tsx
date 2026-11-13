@@ -2593,7 +2593,7 @@ export default function App() {
                         : selectedAssets.isError
                           ? "素材信息读取失败，请重新选择。"
                           : imageCount
-                            ? `本轮 ${imageCount} 张图片将发送至 DeepSeek 读图（上限 ${visionLimit} 张）`
+                            ? `本轮 ${imageCount} 张图片将发送至模型服务读图（上限 ${visionLimit} 张）`
                             : "本轮仅发送素材文字信息"}
                     </div>
                   </>
@@ -2602,7 +2602,7 @@ export default function App() {
                   aria-label="发送给创作助手"
                   placeholder={
                     !health.data?.planner.configured
-                      ? "先在设置中配置 DeepSeek 官方 API key"
+                      ? "先在设置中配置模型 API Key"
                       : "描述想法，选中图片或粘贴本工作台的图片链接…"
                   }
                   value={message}
@@ -2889,8 +2889,8 @@ export default function App() {
             ComfyUI 工作流执行。
           </p>
           <p className="muted">
-            文字需求及所选素材的描述会发送给 DeepSeek 官方
-            API。图片与视频生成由本机 ComfyUI 完成。
+            文字需求及所选素材的描述会发送给当前配置的模型服务。图片与视频生成由本机
+            ComfyUI 完成。
           </p>
         </Modal>
       )}
@@ -3255,6 +3255,7 @@ function ToolEditor({
                 ) : (
                   <input
                     type="number"
+                    required={field.required}
                     min={field.min ?? 0}
                     max={field.max ?? 9007199254740991}
                     step={
@@ -3265,7 +3266,11 @@ function ToolEditor({
                     }
                     value={params[field.name] ?? ""}
                     placeholder={
-                      field.type === "seed" ? "留空随机" : "跟随输入"
+                      field.type === "seed"
+                        ? "留空随机"
+                        : field.required
+                          ? "必填"
+                          : "跟随输入"
                     }
                     onChange={(e) =>
                       setParams({
@@ -3865,7 +3870,7 @@ function SettingsDialog({
   return (
     <Modal
       title="设置与本机状态"
-      description="DeepSeek 官方模型、资源预算和素材维护。"
+      description="对话模型、资源预算和素材维护。"
       onClose={onClose}
       wide
     >
@@ -3874,7 +3879,7 @@ function SettingsDialog({
       ) : (
         <div className="settings-content">
           <section>
-            <h3>DeepSeek 官方 API</h3>
+            <h3>对话模型 API</h3>
             <div className="settings-summary">
               <span
                 className={`status-dot ${s.api_key_configured ? "green" : ""}`}
@@ -3883,7 +3888,7 @@ function SettingsDialog({
               <span className="badge">{s.llm_model}</span>
             </div>
             <label>
-              官方 API Key
+              API Key
               <input
                 type="password"
                 autoComplete="new-password"
@@ -3927,12 +3932,12 @@ function SettingsDialog({
             </div>
             {s.api_key_from_environment && (
               <small>
-                当前进程使用 DEEPSEEK_API_KEY 环境变量；更改环境变量后需重启。
+                当前进程使用 {s.api_key_environment} 环境变量，更改后需重启。
               </small>
             )}
             <p className="muted">
-              助手会发送需求、项目背景、素材描述和选中图片的读图副本至
-              DeepSeek。视频暂只发送文件信息。图像与视频生成在本机完成；密钥不写入工作流或备份。
+              助手会将需求、项目背景、素材描述和选中图片的读图副本发送至当前模型服务。视频暂只发送文件信息。图像与视频生成在本机完成，密钥存入
+              Windows 凭据管理器。
             </p>
             <p className="muted">
               输入上限 {(s.max_input_tokens / 1024).toFixed(0)}K tokens，达到
@@ -3955,7 +3960,7 @@ function SettingsDialog({
               </span>
             </div>
             <small>
-              按高峰价格保守估算，实际账单以 DeepSeek 为准。未知费用调用：
+              按 DeepSeek 高峰价格估算，实际账单以当前服务商为准。未知费用调用：
               {s.usage.unknown_calls}。
             </small>
           </section>

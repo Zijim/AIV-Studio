@@ -1,0 +1,25 @@
+{
+  "id": "qwen.edit.local",
+  "version": "1.0.0",
+  "task_mode": "image_edit_single",
+  "output_format": "edit",
+  "shared": [
+    "shared/1.2.0/creative_rules.md"
+  ],
+  "description": "局部遮罩补绘，适合去掉小物件和修补瑕疵，保留原图尺寸及选区外像素。",
+  "use_cases": [
+    "去掉小物件",
+    "修复局部瑕疵"
+  ],
+  "limitations": [
+    "先观察原图定位目标。必要时调用 inspect_media 裁切复看，再换算回原图的坐标。",
+    "parameters 必须填写 region_x、region_y、region_width、region_height，均相对原图归一化到 0–1。",
+    "固定使用 4 步 Lightning LoRA。编辑目标和补绘内容写入 prompt_document.instruction。"
+  ],
+  "provenance": "application tool capabilities",
+  "files": {
+    "qwen.edit.local/1.0.0/guide.md": "f9c9e7a4d8e51adfdfdb8c017e821d21b333e57b92beb4abd0715c21b31b814b",
+    "qwen.edit.local/1.0.0/examples.json": "131a3ef8a2443eb8724fde6db3c9e6ef94bbb7a2362b3bb97bf410e69ce0c826",
+    "shared/1.2.0/creative_rules.md": "6eadafb1303d8d3b29c223b7fd2ff45bb44fd4fac7f1b66aad7589d9390a880b"
+  }
+}

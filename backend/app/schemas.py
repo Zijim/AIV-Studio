@@ -2,6 +2,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+LOCAL_EDIT_TOOL = "image.edit.qwen.local"
+LOCAL_EDIT_REGION_FIELDS = ("region_x", "region_y", "region_width", "region_height")
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -90,6 +93,25 @@ class ReferenceParams(StrictModel):
     seed: int | None = Field(default=None, ge=0, le=9007199254740991)
 
 
+class LocalEditParams(ReferenceParams):
+    region_x: float = Field(
+        ge=0, lt=1, strict=True, description="Left edge in the oriented source image, normalized to 0–1."
+    )
+    region_y: float = Field(
+        ge=0, lt=1, strict=True, description="Top edge in the oriented source image, normalized to 0–1."
+    )
+    region_width: float = Field(gt=0, le=1, strict=True, description="Width as a fraction of the source image width.")
+    region_height: float = Field(
+        gt=0, le=1, strict=True, description="Height as a fraction of the source image height."
+    )
+
+    @model_validator(mode="after")
+    def region_inside_source(self):
+        if self.region_x + self.region_width > 1 + 1e-12 or self.region_y + self.region_height > 1 + 1e-12:
+            raise ValueError("选区需要完整落在原图内。")
+        return self
+
+
 class UpscaleParams(StrictModel):
     scale: float = Field(default=2, ge=1, le=4)
     seed: int | None = Field(default=None, ge=0, le=4294967295)
@@ -116,6 +138,7 @@ PARAMETER_MODELS = {
     "image.generate.qwen": QwenGenerateParams,
     "image.edit.qwen.fast": EditParams,
     "image.edit.qwen.reference": ReferenceParams,
+    LOCAL_EDIT_TOOL: LocalEditParams,
     "image.upscale.seedvr2": UpscaleParams,
     "video.generate.minimax_i2v": VideoParams,
     "video.generate.minimax_t2v": TextVideoParams,

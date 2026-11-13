@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .config import ROOT
 from .errors import AppError
-from .schemas import PARAMETER_MODELS
+from .schemas import LOCAL_EDIT_TOOL, PARAMETER_MODELS
 from .video_modes import VIDEO_MODES
 
 TOOL_MODES = {
@@ -15,6 +15,7 @@ TOOL_MODES = {
     "image.generate.qwen": "image_generate",
     "image.edit.qwen.fast": "image_edit_single",
     "image.edit.qwen.reference": "image_edit_reference",
+    LOCAL_EDIT_TOOL: "image_edit_single",
     "image.upscale.seedvr2": "image_upscale",
     **VIDEO_MODES,
 }

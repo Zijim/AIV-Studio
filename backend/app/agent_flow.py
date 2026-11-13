@@ -15,7 +15,7 @@ from .models import AgentTurn, ContextSnapshot, LLMCall, Message, Plan, record_e
 from .prompt_compile import compile_document, generation_metadata
 from .prompt_composition import COMPOSITION_SYSTEM, composition_model
 from .prompt_guides import TOOL_MODES
-from .schemas import PARAMETER_MODELS
+from .schemas import LOCAL_EDIT_REGION_FIELDS, LOCAL_EDIT_TOOL, PARAMETER_MODELS
 from .video_modes import REFERENCE_PURPOSES, VIDEO_MODES, check_input_slots, input_purpose, source_info
 
 
@@ -397,6 +397,12 @@ class GuidedFlow:
 
     def resolve_settings(self, route):
         source = self.source_parameters(route)
+        if route.tool_id == LOCAL_EDIT_TOOL:
+            same_source = route.based_on_plan_id and {ref.asset_id for ref in route.input_bindings} == {
+                ref["asset_id"] for ref in self.context["pending_plan"]["inputs"]
+            }
+            if not same_source:
+                source = {key: value for key, value in source.items() if key not in LOCAL_EDIT_REGION_FIELDS}
         requested = route.creative_brief.requested_parameters
         # Duration belongs to the later video, never to a preparatory image operation.
         if route.tool_id.startswith(("image.generate", "image.edit")) and "duration_seconds" in requested:
@@ -419,6 +425,9 @@ class GuidedFlow:
         if unsupported:
             raise ValueError(f"当前工具不支持这些执行参数：{'、'.join(sorted(unsupported))}")
         values.update(requested)
+        if route.tool_id == LOCAL_EDIT_TOOL:
+            # The composition stage sees the resolved source pixels and completes the required region.
+            return values
         required_text = (
             {"prompt": "_"}
             if route.tool_id.startswith(("image.generate", "video."))

@@ -5,7 +5,7 @@ import json
 import logging
 import time
 
-from openai import APIConnectionError, APIStatusError, AsyncOpenAI
+from openai import APIConnectionError, APIStatusError
 from pydantic import ValidationError
 from sqlalchemy import select
 
@@ -145,14 +145,14 @@ class CreativeAgent:
         return result
 
     async def request_model(self, request):
-        key = await self.state.planner.key()
+        planner = self.state.planner
+        key = await planner.key()
         if not key:
-            raise AppError("llm_key_missing", "请先在设置中配置 DeepSeek API Key。", 409)
-        async with AsyncOpenAI(
-            api_key=key, base_url=self.settings.llm_url, max_retries=0, timeout=self.settings.llm_timeout
-        ) as client:
-            response = await client.responses.create(**request)
-            result = response.model_dump(mode="json")
+            raise AppError("llm_key_missing", "请先在设置中配置模型 API Key。", 409)
+        session_id = request["_conversation_id"]
+        payload = {field: value for field, value in request.items() if field != "_conversation_id"}
+        response = await planner.request_responses(key, payload, session_id=session_id)
+        result = response.model_dump(mode="json")
         # Native protocol is persisted; consumption and fees are deliberately not recorded.
         result.pop("usage", None)
         return result
@@ -468,7 +468,7 @@ class CreativeAgent:
         )
         if images > self.settings.vision_max_images:
             raise AppError("vision_limit", "同一响应的观察图过多，请减少每次采样数量。", 409)
-        return request
+        return {**request, "_conversation_id": run.conversation_id}
 
     @staticmethod
     def resource_ids(value):

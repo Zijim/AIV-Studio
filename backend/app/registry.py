@@ -9,7 +9,8 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from .errors import AppError
-from .schemas import PARAMETER_MODELS
+from .local_edit import local_edit_geometry
+from .schemas import LOCAL_EDIT_TOOL, PARAMETER_MODELS
 from .video_modes import check_input_slots, source_info
 
 
@@ -59,7 +60,7 @@ class Registry:
             {
                 k: v
                 for k, v in tool.items()
-                if k not in ("template", "bindings", "input_bindings", "source_hash", "prefixes")
+                if k not in ("template", "bindings", "input_bindings", "geometry_bindings", "source_hash", "prefixes")
             }
             for tool in self.tools.values()
         ]
@@ -152,6 +153,9 @@ class Registry:
             if params["width"] * params["height"] > settings.image_max_pixels:
                 raise AppError("resource_limit", "图片面积超过资源设置上限。")
             dimensions = dict(width=params["width"], height=params["height"])
+        elif tool_id == LOCAL_EDIT_TOOL:
+            info = assets["source_image"]["media_info"]
+            dimensions = dict(width=info["width"], height=info["height"])
         elif tool["category"] == "edit":
             info = assets["source_image"]["media_info"]
             factor = min(1, 1280 / max(info["width"], info["height"]))
@@ -202,7 +206,7 @@ class Registry:
         params["seed"] = seed
         return params, [seed + i for i in range(count)], dimensions
 
-    def render(self, tool_id, version, params, uploads, execution_id):
+    def render(self, tool_id, version, params, uploads, execution_id, *, source_size=None):
         tool = self.get(tool_id, version)
         api = copy.deepcopy(tool["template"])
         for key, (node, field) in tool["bindings"].items():
@@ -217,6 +221,13 @@ class Registry:
                     api[target]["inputs"].pop(input_name, None)
         if tool_id == "image.generate.qwen":
             api["11"]["inputs"]["value"] = params["preset"] == "fast"
+        if tool_id == LOCAL_EDIT_TOOL:
+            if not source_size or min(source_size) <= 0:
+                raise AppError("input_type", "局部编辑需要原图的实际宽高。")
+            geometry = local_edit_geometry(params, source_size)
+            for key, targets in tool["geometry_bindings"].items():
+                for node, field in targets:
+                    api[node]["inputs"][field] = geometry[key]
         for node in tool["prefixes"]:
             api[node]["inputs"]["filename_prefix"] = f"AIVAgent/{execution_id}/result"
         return api

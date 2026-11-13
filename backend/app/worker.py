@@ -4,6 +4,8 @@ import json
 import logging
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 import httpx
 from sqlalchemy import delete, func, select
@@ -14,6 +16,7 @@ from .creative_agent_policy import reconcile_execution_slots
 from .creative_agent_scope import require_submission_inputs
 from .errors import AppError
 from .goal_tracking import finish_video_step
+from .local_edit import prepare_local_edit_source
 from .models import (
     AgentTurn,
     Artifact,
@@ -27,7 +30,7 @@ from .models import (
     record_event,
     row_dict,
 )
-from .schemas import PARAMETER_MODELS
+from .schemas import LOCAL_EDIT_TOOL, PARAMETER_MODELS
 from .storage import atomic_json, file_hash
 from .task_timing import event_time, history_times
 
@@ -204,6 +207,19 @@ class Worker:
             if changed:
                 record_event(session, "task.updated", task.project_id, task.id, execution_id=execution_id, **values)
 
+    async def upload_local_edit_source(self, path):
+        with NamedTemporaryFile(
+            prefix="local-edit-", suffix=".png", dir=self.settings.data_dir / "staging", delete=False
+        ) as file:
+            staged = Path(file.name)
+        try:
+            size = await asyncio.to_thread(prepare_local_edit_source, path, staged)
+            digest = await asyncio.to_thread(file_hash, staged)
+            upload = await self.comfy.upload(staged, digest, ".png", "AIVAgent/inputs")
+            return upload, size
+        finally:
+            staged.unlink(missing_ok=True)
+
     async def start(self, execution_id):
         async with self.db.session() as session:
             execution = await session.get(Execution, execution_id)
@@ -221,15 +237,21 @@ class Worker:
                 raise AppError("tool_changed", "确认后的工具版本、节点或模型已不可用，请查看诊断信息。")
             await self.update(execution_id, execution_state="preparing", progress={"stage": "准备输入素材"})
             uploads = {}
+            render_options = {}
             for item in execution.inputs:
                 async with self.db.session() as session:
                     await require_submission_inputs(session, task, execution)
-                asset, blob, path = await self.storage.blob_path(item["asset_id"])
+                _, blob, path = await self.storage.blob_path(item["asset_id"])
                 if blob.sha256 != item["blob_id"] or await asyncio.to_thread(file_hash, path) != blob.sha256:
                     raise AppError("input_integrity", "输入素材内容已改变，已停止提交。")
-                uploads[item["slot"]] = await self.comfy.upload(path, blob.sha256, blob.extension, "AIVAgent/inputs")
+                if execution.tool_id == LOCAL_EDIT_TOOL and item["slot"] == "source_image":
+                    uploads[item["slot"]], render_options["source_size"] = await self.upload_local_edit_source(path)
+                else:
+                    uploads[item["slot"]] = await self.comfy.upload(
+                        path, blob.sha256, blob.extension, "AIVAgent/inputs"
+                    )
             api = self.registry.render(
-                execution.tool_id, execution.tool_version, execution.parameters, uploads, execution.id
+                execution.tool_id, execution.tool_version, execution.parameters, uploads, execution.id, **render_options
             )
             payload = dict(
                 prompt=api,

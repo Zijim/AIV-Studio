@@ -40,7 +40,7 @@ from .models import (
 from .prompt_compile import COMPILER_VERSION, compile_document
 from .prompt_composition import VideoDocument, composition_model
 from .prompt_guides import content_hash
-from .schemas import ExecutePlan, ManualPlan
+from .schemas import LOCAL_EDIT_REGION_FIELDS, LOCAL_EDIT_TOOL, ExecutePlan, ManualPlan
 from .storage import atomic_json, file_hash
 
 GUIDE_VERSION = "1.2.0"
@@ -335,7 +335,7 @@ class AgentTools:
                     or c["category"] == args.category
                     or (args.category == "image" and c["id"].startswith("image."))
                 ],
-                "unconnected": ["editing/composition", "standalone voiceover", "mixing", "subtitle composition"],
+                "unconnected": ["video editing/composition", "standalone voiceover", "mixing", "subtitle composition"],
             }
         )
 
@@ -394,6 +394,9 @@ class AgentTools:
                 if execution and execution.tool_id == tool["id"]:
                     source_params = dict(execution.parameters)
         parameters = dict(args.parameters)
+        if tool["id"] == LOCAL_EDIT_TOOL:
+            for key in LOCAL_EDIT_REGION_FIELDS:
+                source_params.pop(key, None)
         if tool["id"] == "image.generate.qwen":
             user_texts = (run.goal, *(entry["answer"] for entry in run.clarifications))
             requested_quality = args.creative_brief.requested_parameters.get("preset") == "quality" and any(

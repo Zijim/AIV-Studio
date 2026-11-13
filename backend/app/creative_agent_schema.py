@@ -211,7 +211,7 @@ TOOL_MODELS = {
     ),
     "list_capabilities": (
         Capabilities,
-        "Discover registered production capabilities and actual availability. No editing/TTS/subtitle compositor is connected.",
+        "Discover registered production capabilities and actual availability. No video editing, TTS, or subtitle compositor is connected.",
     ),
     "get_capability": (
         Capability,

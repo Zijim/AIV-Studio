@@ -1,0 +1,18 @@
+[
+  {
+    "request": "把右侧脸颊旁的小麦克风去掉，补回毛发。",
+    "observation": "目标位于本例原图左上坐标约 (0.503, 0.397) 的小区域。根据实际素材定位后填写各项。",
+    "parameters": {
+      "region_x": 0.503,
+      "region_y": 0.397,
+      "region_width": 0.069,
+      "region_height": 0.041
+    },
+    "document": {
+      "instruction": "Remove the small microphone beside the right corner of the mouth and restore continuous fur matching the surrounding color, texture and lighting.",
+      "keep": ["原图构图和选区外像素"],
+      "changes": ["移除嘴边麦克风，补回自然毛发"],
+      "negative_prompt": ""
+    }
+  }
+]

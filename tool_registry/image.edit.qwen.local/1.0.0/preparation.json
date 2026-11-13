@@ -1,0 +1,8 @@
+{
+  "source": "D:\\Project\\AIV_Agent2\\tool_registry\\image.edit.qwen.local\\1.0.0\\source.workflow.json",
+  "changes": [
+    "Crop surrounding context, inpaint with 4-step Lightning, and composite the feathered patch onto the original canvas."
+  ],
+  "source_hash": "c6ac66775f93cf33462638d81f47c592c100340c8a9e9d501b6fec14e7fc5f5a",
+  "template_hash": "339f5b1834862c6e345169cb1720d9b54e7859d593f87d7033882700af628b20"
+}

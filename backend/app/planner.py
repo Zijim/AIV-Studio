@@ -39,6 +39,9 @@ from .schemas import (
 )
 from .vision import IMAGE_TOKEN_RESERVE, linked_asset_ids, prepare_image, request_audit
 
+DEEPSEEK_CREDENTIAL_SERVICE = "AIVAgent.DeepSeek"
+OPENCODE_CREDENTIAL_SERVICE = "AIVAgent.OpenCodeGo"
+
 PRICES = {
     "currency": "USD",
     "basis": "peak_estimate",
@@ -67,25 +70,47 @@ class Planner:
         self.counter = TokenCounter()
         self.guides = GuideRegistry(settings.data_dir)
 
+    @property
+    def key_environment(self):
+        return "OPENCODE_API_KEY" if self.settings.uses_opencode_go else "DEEPSEEK_API_KEY"
+
+    @property
+    def credential_service(self):
+        return OPENCODE_CREDENTIAL_SERVICE if self.settings.uses_opencode_go else DEEPSEEK_CREDENTIAL_SERVICE
+
     async def key(self):
-        if os.environ.get("DEEPSEEK_API_KEY"):
-            return os.environ["DEEPSEEK_API_KEY"].strip()
+        value = os.environ.get(self.key_environment, "").strip()
+        if value:
+            return value
         try:
-            return await asyncio.to_thread(keyring.get_password, "AIVAgent.DeepSeek", "official")
+            return await asyncio.to_thread(keyring.get_password, self.credential_service, "official")
         except keyring.errors.KeyringError:
             return None
 
     async def credentials(self, value):
         try:
             if value:
-                await asyncio.to_thread(keyring.set_password, "AIVAgent.DeepSeek", "official", value.strip())
+                await asyncio.to_thread(keyring.set_password, self.credential_service, "official", value.strip())
             else:
                 try:
-                    await asyncio.to_thread(keyring.delete_password, "AIVAgent.DeepSeek", "official")
+                    await asyncio.to_thread(keyring.delete_password, self.credential_service, "official")
                 except keyring.errors.PasswordDeleteError:
                     pass
         except keyring.errors.KeyringError as exc:
-            raise AppError("credential_store", "Windows凭据保存失败，请改用DEEPSEEK_API_KEY环境变量。", 503) from exc
+            raise AppError("credential_store", f"Windows 凭据保存失败，请改用 {self.key_environment} 环境变量。", 503) from exc
+
+    async def request_responses(self, key, request, *, session_id):
+        headers = {}
+        if self.settings.uses_opencode_go:
+            headers = {"User-Agent": "AIVStudio/0.1.0", "x-opencode-session": f"ses_aiv_{session_id}"}
+        async with AsyncOpenAI(
+            api_key=key,
+            base_url=self.settings.llm_url,
+            max_retries=0,
+            timeout=self.settings.llm_timeout,
+            default_headers=headers,
+        ) as client:
+            return await client.responses.create(**request)
 
     async def usage(self):
         day = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
@@ -176,7 +201,7 @@ class Planner:
             )
             s.add(call)
             turn.call_count += 1
-            return call.id
+            return call.id, turn.conversation_id or default_conversation_id(turn.project_id)
 
     def proposal_request(self, context, repair=None, images=()):
         instructions = SYSTEM + ("\n上次结果未通过校验，请修复：" + repair if repair else "")
@@ -206,12 +231,9 @@ class Planner:
         return RouterResult.model_validate_json(output)
 
     async def invoke(self, turn_id, key, request, purpose="proposal"):
-        call_id = await self.reserve(turn_id, request, purpose)
+        call_id, conversation_id = await self.reserve(turn_id, request, purpose)
         try:
-            async with AsyncOpenAI(
-                api_key=key, base_url=self.settings.llm_url, max_retries=0, timeout=self.settings.llm_timeout
-            ) as client:
-                response = await client.responses.create(**request)
+            response = await self.request_responses(key, request, session_id=conversation_id)
             result = response.model_dump(mode="json")
             usage = result.get("usage") or {}
             hits = (usage.get("input_tokens_details") or {}).get("cached_tokens", 0) or 0
@@ -235,7 +257,7 @@ class Planner:
                     f" HTTP {exc.status_code}" if isinstance(exc, APIStatusError) else ""
                 )
             code = "llm_auth" if isinstance(exc, APIStatusError) and exc.status_code in (401, 403) else "llm_request"
-            raise AppError(code, "DeepSeek调用未完成。请检查密钥、账户余额和网络；本次不会自动重试。", 502) from exc
+            raise AppError(code, "模型调用未完成。请检查密钥、账户额度和网络。本次不会自动重试。", 502) from exc
 
     @staticmethod
     def history_items(messages):
@@ -442,7 +464,7 @@ class Planner:
                     return old.result
             key = await self.key()
             if not key:
-                raise AppError("llm_not_configured", "请先在设置中保存DeepSeek官方API key。手动工具可以直接使用。", 409)
+                raise AppError("llm_not_configured", "请先在设置中保存模型 API Key。手动工具可以直接使用。", 409)
             linked_ids = linked_asset_ids(request.content, self.settings.port, self.settings.public_origin)
             selected_ids = list(dict.fromkeys([*request.selected_asset_ids, *linked_ids]))
             if len(selected_ids) > 30:

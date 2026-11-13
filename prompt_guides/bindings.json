@@ -21,6 +21,13 @@
     "guide_version": "1.2.0"
   },
   {
+    "tool_id": "image.edit.qwen.local",
+    "tool_version": "1.0.0",
+    "task_mode": "image_edit_single",
+    "guide_id": "qwen.edit.local",
+    "guide_version": "1.0.0"
+  },
+  {
     "tool_id": "image.edit.qwen.reference",
     "tool_version": "1.0.0",
     "task_mode": "image_edit_reference",

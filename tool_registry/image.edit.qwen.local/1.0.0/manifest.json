@@ -1,0 +1,262 @@
+{
+  "id": "image.edit.qwen.local",
+  "name": "局部编辑",
+  "subtitle": "Qwen Edit · Lightning 4步 · 遮罩补绘",
+  "category": "edit",
+  "source": "局部编辑.json",
+  "inputs": [
+    {
+      "slot": "source_image",
+      "label": "原图",
+      "media_type": "image",
+      "required": true
+    }
+  ],
+  "fields": [
+    {
+      "name": "instruction",
+      "label": "编辑指令",
+      "type": "textarea",
+      "default": "",
+      "required": true
+    },
+    {
+      "name": "region_x",
+      "label": "选区左边（0–1）",
+      "type": "number",
+      "default": null,
+      "min": 0,
+      "max": 1,
+      "step": "any",
+      "required": true
+    },
+    {
+      "name": "region_y",
+      "label": "选区上边（0–1）",
+      "type": "number",
+      "default": null,
+      "min": 0,
+      "max": 1,
+      "step": "any",
+      "required": true
+    },
+    {
+      "name": "region_width",
+      "label": "选区宽度（0–1）",
+      "type": "number",
+      "default": null,
+      "min": 0,
+      "max": 1,
+      "step": "any",
+      "required": true
+    },
+    {
+      "name": "region_height",
+      "label": "选区高度（0–1）",
+      "type": "number",
+      "default": null,
+      "min": 0,
+      "max": 1,
+      "step": "any",
+      "required": true
+    },
+    {
+      "name": "seed",
+      "label": "随机种子",
+      "type": "seed",
+      "default": null
+    }
+  ],
+  "defaults": {},
+  "bindings": {
+    "instruction": [
+      "3",
+      "prompt"
+    ],
+    "seed": [
+      "1",
+      "seed"
+    ]
+  },
+  "input_bindings": {
+    "source_image": [
+      "7",
+      "image"
+    ]
+  },
+  "geometry_bindings": {
+    "source_width": [
+      [
+        "40",
+        "width"
+      ]
+    ],
+    "source_height": [
+      [
+        "40",
+        "height"
+      ]
+    ],
+    "crop_x": [
+      [
+        "30",
+        "x"
+      ],
+      [
+        "38",
+        "x"
+      ]
+    ],
+    "crop_y": [
+      [
+        "30",
+        "y"
+      ],
+      [
+        "38",
+        "y"
+      ]
+    ],
+    "crop_width": [
+      [
+        "30",
+        "width"
+      ],
+      [
+        "32",
+        "width"
+      ],
+      [
+        "37",
+        "width"
+      ]
+    ],
+    "crop_height": [
+      [
+        "30",
+        "height"
+      ],
+      [
+        "32",
+        "height"
+      ],
+      [
+        "37",
+        "height"
+      ]
+    ],
+    "sample_width": [
+      [
+        "31",
+        "width"
+      ]
+    ],
+    "sample_height": [
+      [
+        "31",
+        "height"
+      ]
+    ],
+    "mask_x": [
+      [
+        "35",
+        "x"
+      ]
+    ],
+    "mask_y": [
+      [
+        "35",
+        "y"
+      ]
+    ],
+    "mask_width": [
+      [
+        "33",
+        "width"
+      ]
+    ],
+    "mask_height": [
+      [
+        "33",
+        "height"
+      ]
+    ],
+    "feather": [
+      [
+        "34",
+        "left"
+      ],
+      [
+        "34",
+        "top"
+      ],
+      [
+        "34",
+        "right"
+      ],
+      [
+        "34",
+        "bottom"
+      ]
+    ]
+  },
+  "prefixes": [
+    "16"
+  ],
+  "roles": {
+    "16": "final",
+    "15": "preview"
+  },
+  "changes": [
+    "Crop surrounding context, inpaint with 4-step Lightning, and composite the feathered patch onto the original canvas."
+  ],
+  "version": "1.0.0",
+  "local_only": true,
+  "source_hash": "c6ac66775f93cf33462638d81f47c592c100340c8a9e9d501b6fec14e7fc5f5a",
+  "template_hash": "339f5b1834862c6e345169cb1720d9b54e7859d593f87d7033882700af628b20",
+  "required_node_types": [
+    "CFGNorm",
+    "CLIPLoader",
+    "ConditioningZeroOut",
+    "DiffusionModelLoaderKJ",
+    "FeatherMask",
+    "ImageCompositeMasked",
+    "ImageCrop",
+    "ImageScale",
+    "JoinImageWithAlpha",
+    "KSampler",
+    "LoadImage",
+    "LoraLoaderModelOnly",
+    "MaskComposite",
+    "ModelSamplingAuraFlow",
+    "PreviewImage",
+    "SaveImage",
+    "SolidMask",
+    "TextEncodeQwenImageEditPlus",
+    "VAEDecode",
+    "VAEEncodeForInpaint",
+    "VAELoader"
+  ],
+  "required_models": [
+    {
+      "node_type": "DiffusionModelLoaderKJ",
+      "field": "model_name",
+      "value": "qwen_image_edit_2511_fp8mixed.safetensors"
+    },
+    {
+      "node_type": "CLIPLoader",
+      "field": "clip_name",
+      "value": "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+    },
+    {
+      "node_type": "VAELoader",
+      "field": "vae_name",
+      "value": "qwen_image_vae.safetensors"
+    },
+    {
+      "node_type": "LoraLoaderModelOnly",
+      "field": "lora_name",
+      "value": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"
+    }
+  ]
+}

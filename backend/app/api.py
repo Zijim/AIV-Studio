@@ -1287,7 +1287,8 @@ async def settings(request: Request):
     public = state.settings.model_dump(mode="json")
     public.update(
         api_key_configured=bool(await state.planner.key()),
-        api_key_from_environment=bool(__import__("os").environ.get("DEEPSEEK_API_KEY")),
+        api_key_environment=state.planner.key_environment,
+        api_key_from_environment=bool(os.environ.get(state.planner.key_environment, "").strip()),
         usage=await state.planner.usage(),
     )
     async with state.db.session() as s:

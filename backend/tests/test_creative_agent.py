@@ -40,6 +40,7 @@ from app.models import (
 from app.planner import Planner
 from app.plans import PlanService
 from app.registry import Registry
+from app.schemas import LOCAL_EDIT_TOOL
 from app.storage import Storage
 from app.worker import Worker
 
@@ -145,15 +146,17 @@ class AgentTestCase(unittest.IsolatedAsyncioTestCase):
         path.write_text(content, encoding="utf-8")
         return await self.state.storage.ingest(path, name, self.pid)
 
-    async def queued_creation(self, *, source_id=None):
+    async def queued_creation(self, *, source_id=None, capability_id=None, parameters=None):
         count = 0
         args = {
-            "capability_id": "image.edit.qwen.fast" if source_id else "image.generate.zimage",
+            "capability_id": capability_id or ("image.edit.qwen.fast" if source_id else "image.generate.zimage"),
             "operation_id": "main",
             "purpose": "创建目标主体",
             "prompt_document": {"instruction": "make it blue"} if source_id else {"positive_prompt": "blue boat"},
             "inputs": [{"slot": "source_image", "asset_id": source_id}] if source_id else [],
         }
+        if parameters is not None:
+            args["parameters"] = parameters
 
         async def provider(request):
             nonlocal count
@@ -548,6 +551,31 @@ class CreativeAgentTests(AgentTestCase):
         self.assertEqual(run.execution_count, 1)
         async with self.db.session() as s:
             self.assertEqual(await s.scalar(select(func.count()).select_from(Task)), 1)
+
+    async def test_local_edit_capability_queues_a_four_step_masked_edit(self):
+        source_id = await self.key_image()
+        region = dict(region_x=0.85, region_y=0.9, region_width=0.15, region_height=0.1)
+        tool = self.state.registry.get(LOCAL_EDIT_TOOL)
+        capability = self.agent.tools.capability(tool)
+        self.assertEqual(set(capability["parameter_schema"]["required"]), set(region))
+
+        _, _, execution, _ = await self.queued_creation(
+            source_id=source_id, capability_id=LOCAL_EDIT_TOOL, parameters=region
+        )
+        self.assertEqual(execution.inputs[0]["asset_id"], source_id)
+        self.assertEqual({key: execution.parameters[key] for key in region}, region)
+        graph = self.state.registry.render(
+            execution.tool_id,
+            execution.tool_version,
+            execution.parameters,
+            {"source_image": "input.png"},
+            execution.id,
+            source_size=(512, 512),
+        )
+        self.assertEqual(graph["1"]["inputs"]["steps"], 4)
+        self.assertEqual(graph["1"]["inputs"]["cfg"], 1)
+        self.assertIn("Lightning-4steps", graph["10"]["inputs"]["lora_name"])
+        self.assertEqual(graph["7"]["inputs"]["image"], "input.png")
 
     async def test_qwen_preview_and_submission_default_to_lightning(self):
         rid = await self.start("生成一张写实的灭霸照片")

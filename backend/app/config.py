@@ -52,6 +52,17 @@ class Settings(BaseSettings):
     agent_media_seconds: int = Field(default=60, ge=5, le=180)
     agent_media_max_frames: int = Field(default=1800, ge=30, le=18000)
 
+    @property
+    def uses_opencode_go(self) -> bool:
+        parsed = urlsplit(self.llm_url)
+        return (
+            parsed.scheme == "https"
+            and parsed.netloc.lower() in ("opencode.ai", "opencode.ai:443")
+            and parsed.path.rstrip("/") == "/inference/go/openai/v1"
+            and not parsed.query
+            and not parsed.fragment
+        )
+
     @field_validator("public_origin")
     @classmethod
     def validate_public_origin(cls, value):
