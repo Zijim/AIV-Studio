@@ -148,3 +148,11 @@ Run 启动时保存的 `goal_snapshot.project`（目标、风格、revision）�
 .venv/Scripts/python.exe -X utf8 scripts/validate_creative_agent.py --background
 .venv/Scripts/python.exe -X utf8 scripts/validate_creative_agent.py --generate
 ```
+
+## 阶段成果与证据面板（2026-11-13）
+
+- 运行列表与详情为最新 Run 和所有未结束 Run 附加 `scope_summary` 与 `documents`。`scope_summary` 基于同一个 `allowed_assets` 谓词统计指定、关键素材、本次成果、文档和排除数量，并提供最多 8 个来源示例；类别可能重叠，`available` 为去重总数。历史终态 Run 仍可单独读取详情获得相同字段。
+- `/api/v1/tasks` 新增 `agent_run_id` 过滤，面板直接复用现有任务、执行、输入产物和中间产物解析，不新增表或迁移。工作文档来自 `write_document` 已完成的调用，与任务产物分开列出。
+- 新增 `GET /agent-runs/{run_id}/calls/{call_id}`，按需返回单个工具调用的参数与结果；活动列表本身不携带大参数和完整提示词。
+- 自主面板新增四块：本次可用素材（来源、数量、示例，可定位）、阶段成果（任务状态、候选/中间产物缩略图、文档查看/引用/下载）、执行与返工（每个要求的已用次数和记录）、活动明细（能力、生产目标、执行参数、任务/证据 ID、检查与原始记录）。Run 结束后任务和活动轮询停止。
+- 回归新增 3 项：来源计数与排除、文档列表与计数、运行面板接口/任务过滤/调用详情；前端 `tsc -b && vite build` 通过，完整后端 126 项测试通过。

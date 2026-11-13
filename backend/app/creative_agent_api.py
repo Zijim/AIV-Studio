@@ -4,12 +4,42 @@ from fastapi import APIRouter, Query, Request
 from sqlalchemy import select
 
 from .creative_agent_schema import Answer, RunControl, StartRun
-from .creative_agent_scope import TERMINAL_RUNS
+from .creative_agent_scope import TERMINAL_RUNS, scope_summary
 from .errors import AppError
-from .models import CreativeAgentCall, CreativeAgentRun, row_dict
+from .models import Asset, CreativeAgentCall, CreativeAgentRun, row_dict
 from .plans import require_project
 
 router = APIRouter(prefix="/api/v1")
+
+
+async def run_extras(session, run):
+    """Human-facing context: allow-listed material summary and saved documents."""
+    documents = (
+        await session.execute(
+            select(CreativeAgentCall, Asset)
+            .join(Asset, Asset.id == CreativeAgentCall.asset_id)
+            .where(
+                CreativeAgentCall.run_id == run.id,
+                CreativeAgentCall.asset_id.is_not(None),
+                CreativeAgentCall.state == "completed",
+            )
+            .order_by(CreativeAgentCall.created_at)
+        )
+    ).all()
+    return {
+        "scope_summary": await scope_summary(session, run),
+        "documents": [
+            {
+                "asset_id": asset.id,
+                "blob_id": asset.blob_id,
+                "name": asset.name,
+                "media_type": asset.media_type,
+                "parent_asset_id": (asset.source_info or {}).get("parent_asset_id"),
+                "created_at": asset.created_at,
+            }
+            for _call, asset in documents
+        ],
+    }
 
 
 @router.post("/projects/{project_id}/agent-runs", status_code=202)
@@ -27,7 +57,16 @@ async def list_runs(
         if conversation_id:
             query = query.where(CreativeAgentRun.conversation_id == conversation_id)
         rows = (await session.scalars(query.order_by(CreativeAgentRun.created_at.desc()).limit(limit))).all()
-        return {"items": [row_dict(r) for r in rows], "terminal_states": TERMINAL_RUNS}
+        # The latest run and any active run need the panel extras. Historical
+        # terminal runs get them from GET /agent-runs/{id} only when opened.
+        detailed = {row.id for row in rows[:1]} | {row.id for row in rows if row.state not in TERMINAL_RUNS}
+        items = []
+        for row in rows:
+            item = row_dict(row)
+            if row.id in detailed:
+                item.update(await run_extras(session, row))
+            items.append(item)
+        return {"items": items, "terminal_states": TERMINAL_RUNS}
 
 
 @router.get("/agent-runs/{run_id}")
@@ -36,7 +75,9 @@ async def get_run(request: Request, run_id: str):
         run = await session.get(CreativeAgentRun, run_id)
         if not run:
             raise AppError("run_not_found", "自主创作记录不存在。", 404)
-        return row_dict(run)
+        data = row_dict(run)
+        data.update(await run_extras(session, run))
+        return data
 
 
 @router.get("/agent-runs/{run_id}/activity")
@@ -65,6 +106,35 @@ async def activity(request: Request, run_id: str):
                 }
                 for c in calls
             ]
+        }
+
+
+@router.get("/agent-runs/{run_id}/calls/{call_id}")
+async def call_detail(request: Request, run_id: str, call_id: str):
+    async with request.app.state.db.session() as session:
+        if not await session.get(CreativeAgentRun, run_id):
+            raise AppError("run_not_found", "自主创作记录不存在。", 404)
+        call = await session.scalar(
+            select(CreativeAgentCall).where(
+                CreativeAgentCall.id == call_id,
+                CreativeAgentCall.run_id == run_id,
+            )
+        )
+        if not call:
+            raise AppError("call_not_found", "工具调用记录不存在。", 404)
+        try:
+            arguments = json.loads(call.arguments)
+        except (TypeError, ValueError):
+            arguments = call.arguments
+        return {
+            "id": call.id,
+            "call_id": call.call_id,
+            "name": call.name,
+            "state": call.state,
+            "created_at": call.created_at,
+            "plan_id": call.plan_id,
+            "arguments": arguments,
+            "result": call.result,
         }
 
 

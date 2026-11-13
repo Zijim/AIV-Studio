@@ -1076,11 +1076,18 @@ async def execute_plan(request: Request, plan_id: str, body: ExecutePlan):
 
 
 @router.get("/tasks")
-async def tasks(request: Request, project_id: str | None = None, limit: int = Query(80, ge=1, le=200)):
+async def tasks(
+    request: Request,
+    project_id: str | None = None,
+    agent_run_id: str | None = None,
+    limit: int = Query(80, ge=1, le=200),
+):
     async with svc(request).db.session() as s:
         query = select(Task).order_by(Task.queue_seq.desc()).limit(limit)
         if project_id:
             query = query.where(Task.project_id == project_id)
+        if agent_run_id:
+            query = query.where(Task.agent_run_id == agent_run_id)
         task_rows = list((await s.scalars(query)).all())
         execution_rows = list(
             await s.scalars(

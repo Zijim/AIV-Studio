@@ -18,8 +18,9 @@ from sqlalchemy import func, select, text
 
 from app.config import ROOT, Settings
 from app.creative_agent import CreativeAgent
-from app.creative_agent_schema import Answer, Creation, Inspect, ResourceScope, Search, StartRun, WorkPlan
-from app.creative_agent_scope import protect_active, require_run_background, scoped_asset
+from app.creative_agent_api import run_extras
+from app.creative_agent_schema import Answer, Creation, Document, Inspect, ResourceScope, Search, StartRun, WorkPlan
+from app.creative_agent_scope import protect_active, require_run_background, scope_summary, scoped_asset
 from app.db import Database
 from app.errors import AppError
 from app.models import (
@@ -459,6 +460,102 @@ class CreativeAgentTests(AgentTestCase):
             await self.run_record(rid), call, Creation.model_validate_json(call.arguments), 1
         )
         self.assertEqual(repeated["data"]["task_id"], task.id)
+
+    async def test_scope_summary_counts_sources_and_exclusions(self):
+        selected = await self.import_text("选中.md", "selected")
+        key = await self.import_text("关键.md", "key")
+        await self.import_text("未授权.md", "hidden")
+        async with self.db.transaction() as s:
+            (await s.get(ProjectAsset, (self.pid, key))).curated_at = "2026-11-10"
+        rid = await self.start(selected_asset_ids=[selected])
+        async with self.db.session() as s:
+            summary = await scope_summary(s, await s.get(CreativeAgentRun, rid))
+        self.assertEqual(summary["available"], 2)
+        self.assertEqual(summary["selected"], 1)
+        self.assertEqual(summary["key_assets"], 1)
+        self.assertEqual(summary["run_outputs"], 0)
+        self.assertEqual(summary["documents"], 0)
+        self.assertEqual({item["source"] for item in summary["samples"]}, {"selected", "key"})
+        async with self.db.transaction() as s:
+            run = await s.get(CreativeAgentRun, rid)
+            policy = dict(run.scope["reference_policy"])
+            policy["excluded_asset_ids"] = [key]
+            run.scope = {**run.scope, "reference_policy": policy}
+        async with self.db.session() as s:
+            summary = await scope_summary(s, await s.get(CreativeAgentRun, rid))
+        self.assertEqual(summary["available"], 1)
+        self.assertEqual(summary["selected"], 1)
+        self.assertEqual(summary["key_assets"], 0)
+        self.assertEqual(summary["excluded"], 1)
+
+    async def test_run_extras_lists_saved_documents_and_counts(self):
+        rid = await self.start("写一份文档")
+        async with self.db.transaction() as s:
+            (await s.get(CreativeAgentRun, rid)).state = "running"
+        async with self.db.transaction() as s:
+            step = CreativeAgentStep(run_id=rid, sequence=1, control_version=1)
+            s.add(step)
+            await s.flush()
+            call = CreativeAgentCall(
+                run_id=rid,
+                step_id=step.id,
+                call_id="doc",
+                position=0,
+                name="write_document",
+                arguments="{}",
+            )
+            s.add(call)
+            await s.flush()
+            call_id = call.id
+        run = await self.run_record(rid)
+        result = await self.agent.tools.write_document(run, call, Document(name="脚本", content="# 脚本正文"), 1)
+        async with self.db.transaction() as s:
+            (await s.get(CreativeAgentCall, call_id)).state = "completed"
+        async with self.db.session() as s:
+            extras = await run_extras(s, await s.get(CreativeAgentRun, rid))
+        self.assertEqual(extras["scope_summary"]["documents"], 1)
+        self.assertEqual([item["asset_id"] for item in extras["documents"]], [result["data"]["asset_id"]])
+        self.assertEqual(extras["documents"][0]["name"], "脚本.md")
+
+    async def test_panel_endpoints_expose_scope_tasks_and_call_details(self):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import JSONResponse
+
+        from app.api import router as api_router
+        from app.creative_agent_api import router as agent_router
+
+        rid, task, execution, args = await self.queued_creation()
+        app = FastAPI()
+        for key, value in vars(self.state).items():
+            setattr(app.state, key, value)
+        app.state.creative_agent = self.agent
+        app.include_router(api_router)
+        app.include_router(agent_router)
+
+        @app.exception_handler(AppError)
+        async def app_error(request, exc):
+            return JSONResponse({"error": {"code": exc.code, "message": exc.message}}, status_code=exc.status)
+
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 4321))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            listed = (
+                await client.get(f"/api/v1/projects/{self.pid}/agent-runs?conversation_id={self.cid}")
+            ).json()
+            item = next(row for row in listed["items"] if row["id"] == rid)
+            self.assertIn("scope_summary", item)
+            self.assertEqual(item["documents"], [])
+            detail = (await client.get(f"/api/v1/agent-runs/{rid}")).json()
+            self.assertEqual(detail["scope_summary"]["available"], 0)
+            activity = (await client.get(f"/api/v1/agent-runs/{rid}/activity")).json()
+            invoke = next(call for call in activity["items"] if call["name"] == "invoke_creation")
+            call_detail = (await client.get(f"/api/v1/agent-runs/{rid}/calls/{invoke['id']}")).json()
+            self.assertEqual(call_detail["arguments"]["capability_id"], "image.generate.zimage")
+            self.assertEqual(call_detail["result"]["data"]["task_id"], task.id)
+            filtered = (await client.get(f"/api/v1/tasks?project_id={self.pid}&agent_run_id={rid}")).json()
+            self.assertEqual([row["id"] for row in filtered], [task.id])
+            empty = (await client.get(f"/api/v1/tasks?project_id={self.pid}&agent_run_id={uid()}")).json()
+            self.assertEqual(empty, [])
 
     async def test_control_batch_is_rejected_before_any_side_effect(self):
         count = 0

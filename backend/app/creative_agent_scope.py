@@ -1,6 +1,6 @@
 """One scope predicate, checked before discovery, reading and production submission."""
 
-from sqlalchemy import and_, exists, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 
 from .errors import AppError
 from .models import Asset, CreativeAgentCall, CreativeAgentRun, Execution, ProjectAsset, Task
@@ -77,15 +77,21 @@ def reference_assets(run):
     )
 
 
-def allowed_assets(run, *, protect_pending=False):
-    output = exists(
+def output_assets(run):
+    return exists(
         select(Task.id)
         .join(Execution, Execution.task_id == Task.id)
         .where(Task.agent_run_id == run.id, Execution.id == Asset.execution_id)
     )
-    document = exists(
+
+
+def document_assets(run):
+    return exists(
         select(CreativeAgentCall.id).where(CreativeAgentCall.run_id == run.id, CreativeAgentCall.asset_id == Asset.id)
     )
+
+
+def allowed_assets(run, *, protect_pending=False):
     references = reference_assets(run)
     policy = run.scope.get("reference_policy", {})
     if not protect_pending:
@@ -101,10 +107,86 @@ def allowed_assets(run, *, protect_pending=False):
         ProjectAsset.removed_at.is_(None),
         or_(
             references,
-            output,
-            document,
+            output_assets(run),
+            document_assets(run),
         ),
     )
+
+
+async def scope_summary(session, run):
+    """Counts and a small sample for the human panel; never a wider agent scope."""
+    policy = run.scope.get("reference_policy", {})
+    base = allowed_assets(run)
+    selected_ids = set(run.scope.get("selected", []))
+
+    async def count(condition=None):
+        query = (
+            select(func.count()).select_from(Asset).join(ProjectAsset, ProjectAsset.asset_id == Asset.id).where(base)
+        )
+        if condition is not None:
+            query = query.where(condition)
+        return (await session.scalar(query)) or 0
+
+    available = await count()
+    selected = await count(Asset.id.in_(selected_ids)) if selected_ids else 0
+    key_assets = (
+        await count(ProjectAsset.curated_at.is_not(None)) if run.scope.get("use_key_assets", True) else 0
+    )
+    run_outputs = await count(output_assets(run))
+    documents = await count(document_assets(run))
+    rows = (
+        await session.execute(
+            select(Asset, ProjectAsset)
+            .join(ProjectAsset, ProjectAsset.asset_id == Asset.id)
+            .where(base)
+            .order_by(Asset.created_at.desc(), Asset.id)
+            .limit(8)
+        )
+    ).all()
+    execution_ids = set(
+        await session.scalars(
+            select(Execution.id).join(Task, Task.id == Execution.task_id).where(Task.agent_run_id == run.id)
+        )
+    )
+    document_ids = set(
+        await session.scalars(
+            select(CreativeAgentCall.asset_id).where(
+                CreativeAgentCall.run_id == run.id, CreativeAgentCall.asset_id.is_not(None)
+            )
+        )
+    )
+    samples = []
+    for asset, membership in rows:
+        if asset.id in selected_ids:
+            source = "selected"
+        elif membership.curated_at is not None and run.scope.get("use_key_assets", True):
+            source = "key"
+        elif asset.execution_id in execution_ids:
+            source = "run_output"
+        elif asset.id in document_ids:
+            source = "document"
+        else:
+            source = "other"
+        samples.append(
+            {
+                "asset_id": asset.id,
+                "name": membership.display_name or asset.name,
+                "media_type": asset.media_type,
+                "source": source,
+            }
+        )
+    return {
+        "mode": policy.get("mode") or "available",
+        "pending": not scope_ready(run),
+        "key_assets_enabled": run.scope.get("use_key_assets", True),
+        "available": available,
+        "selected": selected,
+        "key_assets": key_assets,
+        "run_outputs": run_outputs,
+        "documents": documents,
+        "excluded": len(policy.get("excluded_asset_ids", [])),
+        "samples": samples,
+    }
 
 
 async def scoped_asset(session, run, asset_id):

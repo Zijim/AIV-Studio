@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Copy,
   FileText,
+  Film,
   Link2,
   LoaderCircle,
   Maximize2,
@@ -17,6 +18,7 @@ import {
 } from "lucide-react";
 import { api, type Data, messageSchema, useWorkspace } from "../lib";
 import { ChatMessage } from "./ChatMessage";
+import { ProgressiveImage } from "./ProgressiveImage";
 import { Button } from "./ui";
 
 const terminal = ["completed", "cancelled", "failed"];
@@ -48,6 +50,57 @@ const toolNames: Record<string, string> = {
   update_plan: "更新创作计划",
   ask_user: "请求必要补充",
   finish_run: "检查并交付",
+};
+const taskStates: Record<string, string> = {
+  queued: "排队",
+  running: "生成中",
+  saving: "保存中",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+  needs_attention: "需要处理",
+};
+const scopeSources: Record<string, string> = {
+  selected: "指定",
+  key: "关键素材",
+  run_output: "本次成果",
+  document: "文档",
+  other: "其他",
+};
+const argumentLabels: Record<string, string> = {
+  output_type: "输出类型",
+  query: "查询",
+  media_type: "媒体类型",
+  asset_id: "素材",
+  format: "格式",
+  kind: "结束类别",
+  message: "说明",
+  mode: "素材模式",
+  user_quote: "用户原文",
+  start_seconds: "开始秒",
+  end_seconds: "结束秒",
+  sample_count: "采样数",
+  require_audio: "需要音轨",
+  name: "名称",
+  parent_asset_id: "父文档",
+  note: "说明",
+  category: "类别",
+  question: "问题",
+  reason: "原因",
+  offset: "偏移",
+  length: "长度",
+  limit: "数量",
+};
+const mediaLabels: Record<string, string> = {
+  image: "图片",
+  video: "视频",
+  audio: "音频",
+  text: "文本",
+};
+const planStates: Record<string, string> = {
+  pending: "待执行",
+  running: "进行中",
+  completed: "已完成",
 };
 
 export function AutonomousAssistant({
@@ -97,6 +150,14 @@ export function AutonomousAssistant({
     refetchInterval: active ? 2000 : false,
   });
   const calls: Data[] = activity.data?.items ?? [];
+  const taskList = useQuery({
+    queryKey: ["agent-tasks", run?.id],
+    queryFn: () =>
+      api<Data[]>(`/tasks?project_id=${projectId}&agent_run_id=${run!.id}`),
+    enabled: !!run,
+    refetchInterval: active ? 2000 : false,
+  });
+  const taskItems: Data[] = taskList.data ?? [];
   const question = calls.find(
     (c) => c.name === "ask_user" && c.state === "waiting",
   );
@@ -244,6 +305,7 @@ export function AutonomousAssistant({
               )}{" "}
               分钟 · 自主推进 {Math.round(run.active_ms / 1000)} 秒
             </p>
+            <AgentScopeSummary run={run} onOpen={onOpenAsset} />
             {!!run.work_plan?.items?.length && (
               <ol className="agent-plan">
                 {run.work_plan.items.map((item: Data) => (
@@ -262,9 +324,17 @@ export function AutonomousAssistant({
                 ))}
               </ol>
             )}
+            <AgentStageResults
+              tasks={taskItems}
+              documents={run.documents ?? []}
+              active={active}
+              onOpen={onOpenAsset}
+              onError={onError}
+            />
             {run.stop_reason && (
               <p className="agent-stop">{run.stop_reason.message}</p>
             )}
+            <AgentRework run={run} />
             {active && (
               <div className="agent-controls">
                 {run.state === "paused" || run.state === "needs_attention" ? (
@@ -303,19 +373,12 @@ export function AutonomousAssistant({
                   <ChevronDown size={13} aria-hidden="true" />
                 </summary>
                 {calls.map((call) => (
-                  <div key={call.id}>
-                    <span>{toolNames[call.name] ?? call.name}</span>
-                    <small>
-                      {call.state === "completed"
-                        ? "完成"
-                        : call.state === "failed"
-                          ? "未执行成功"
-                          : call.state === "waiting"
-                            ? "等待中"
-                            : "处理中"}
-                    </small>
-                    {call.result?.error && <p>{call.result.error.message}</p>}
-                  </div>
+                  <AgentCallRow
+                    key={call.id}
+                    runId={run.id}
+                    call={call}
+                    onOpen={onOpenAsset}
+                  />
                 ))}
               </details>
             )}
@@ -459,6 +522,525 @@ export function AutonomousAssistant({
       </form>
     </>
   );
+}
+
+function AgentScopeSummary({
+  run,
+  onOpen,
+}: {
+  run: Data;
+  onOpen: (id: string) => void;
+}) {
+  const summary: Data | undefined = run.scope_summary;
+  if (!summary) return null;
+  const samples: Data[] = summary.samples ?? [];
+  return (
+    <details className="agent-scope-summary">
+      <summary>
+        <span>本次可用素材</span>
+        <small>
+          {summary.pending ? "范围确认中" : `共 ${summary.available} 份`}
+        </small>
+        <ChevronDown size={13} aria-hidden="true" />
+      </summary>
+      <div className="agent-scope-counts">
+        <span>
+          指定 <b>{summary.selected ?? 0}</b>
+        </span>
+        <span>
+          关键素材 <b>{summary.key_assets ?? 0}</b>
+        </span>
+        <span>
+          本次成果 <b>{summary.run_outputs ?? 0}</b>
+        </span>
+        <span>
+          文档 <b>{summary.documents ?? 0}</b>
+        </span>
+        {!!summary.excluded && (
+          <span>
+            排除 <b>{summary.excluded}</b>
+          </span>
+        )}
+      </div>
+      <small>
+        {summary.key_assets_enabled ? "已开放项目关键素材" : "已关闭项目关键素材"}
+        {" · 不读取项目全库"}
+        {summary.mode === "only" ? " · 仅使用白名单" : ""}
+        {summary.mode === "none" ? " · 无参考素材" : ""}
+        {" · 来源类别可能重叠"}
+      </small>
+      {samples.length > 0 && (
+        <div className="agent-scope-items">
+          {samples.map((item: Data) => (
+            <button
+              key={item.asset_id}
+              type="button"
+              onClick={() => onOpen(item.asset_id)}
+              title={item.name}
+            >
+              <span>{item.name}</span>
+              <small>{scopeSources[item.source] ?? item.source}</small>
+            </button>
+          ))}
+        </div>
+      )}
+      {summary.available > samples.length && (
+        <small>仅列出最近 {samples.length} 份</small>
+      )}
+    </details>
+  );
+}
+
+function AgentStageResults({
+  tasks,
+  documents,
+  active,
+  onOpen,
+  onError,
+}: {
+  tasks: Data[];
+  documents: Data[];
+  active: boolean;
+  onOpen: (id: string) => void;
+  onError: (message: string) => void;
+}) {
+  if (!tasks.length && !documents.length) {
+    return active ? (
+      <p className="agent-stage-empty">正在等待首个阶段成果…</p>
+    ) : null;
+  }
+  return (
+    <section className="agent-stage">
+      <h4>
+        阶段成果
+        <span>
+          {tasks.length} 个任务 · {documents.length} 份文档
+        </span>
+      </h4>
+      {tasks.map((task: Data) => (
+        <article className="agent-stage-task" key={task.id}>
+          <header>
+            <strong>{task.title || task.tool_name || "创作任务"}</strong>
+            <small data-state={task.state}>
+              {taskStates[task.state] ?? task.state}
+            </small>
+          </header>
+          <p className="agent-stage-meta">
+            {task.tool_name || "创作工具"}
+            {task.candidate_count ? ` · ${task.candidate_count} 个候选` : ""}
+            {task.error ? ` · ${errorText(task.error)}` : ""}
+          </p>
+          <StageMedia media={task.media ?? {}} onOpen={onOpen} />
+        </article>
+      ))}
+      {documents.length > 0 && (
+        <div className="agent-stage-documents">
+          {documents.map((doc: Data, index: number) => (
+            <AgentArtifact
+              key={doc.asset_id}
+              id={doc.asset_id}
+              index={index}
+              onOpen={onOpen}
+              onError={onError}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function StageMedia({
+  media,
+  onOpen,
+}: {
+  media: Data;
+  onOpen: (id: string) => void;
+}) {
+  const items: Data[] = [];
+  const seen = new Set<string>();
+  for (const group of ["outputs", "intermediates"]) {
+    for (const item of media[group] ?? []) {
+      const key = item.asset_id ?? item.key;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      items.push(item);
+    }
+  }
+  if (!items.length) {
+    return <p className="agent-stage-meta">尚无已保存产物</p>;
+  }
+  return (
+    <div className="agent-stage-media">
+      {items.map((item: Data) => {
+        const assetId: string | null = item.asset_id ?? null;
+        const unavailable =
+          !assetId || ["missing", "purged", "unsaved"].includes(item.presence);
+        const label = item.is_intermediate ? "中间产物" : item.label || "产物";
+        return (
+          <button
+            key={item.key ?? assetId}
+            type="button"
+            className="agent-stage-item"
+            disabled={unavailable}
+            onClick={() => assetId && onOpen(assetId)}
+            title={item.name}
+          >
+            <StageThumb item={item} />
+            <span>{item.name || "未命名产物"}</span>
+            <small>
+              {label}
+              {typeof item.candidate_index === "number"
+                ? ` · 候选 ${item.candidate_index + 1}`
+                : ""}
+              {item.step_label ? ` · ${item.step_label}` : ""}
+              {unavailable ? " · 未保存" : ""}
+            </small>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function StageThumb({ item }: { item: Data }) {
+  const source = item.preview_url ?? item.content_url;
+  if (item.media_type === "image" && source) {
+    return <img src={source} alt={item.name ?? "阶段产物"} loading="lazy" />;
+  }
+  if (item.media_type === "video") {
+    return item.preview_url ? (
+      <img src={item.preview_url} alt={item.name ?? "视频"} loading="lazy" />
+    ) : (
+      <Film size={22} aria-hidden="true" />
+    );
+  }
+  if (item.media_type === "text") {
+    return <FileText size={22} aria-hidden="true" />;
+  }
+  return (
+    <span className="agent-stage-thumb-missing">
+      {item.presence === "unsaved" ? "待保存" : "无预览"}
+    </span>
+  );
+}
+
+function AgentRework({ run }: { run: Data }) {
+  const requirements: Data[] = run.work_plan?.requirements ?? [];
+  const issues: Record<string, Data> = run.issues ?? {};
+  const limit = Number(run.limits?.issue_reworks ?? 0);
+  const used = Object.values(issues).reduce(
+    (sum, issue) => sum + (Number(issue?.count) || 0),
+    0,
+  );
+  if (!requirements.length) return null;
+  return (
+    <details className="agent-rework">
+      <summary>
+        <span>执行与返工</span>
+        <small>
+          {run.execution_count}/{run.limits?.executions ?? "-"} 次创作 · 返工{" "}
+          {used} 次
+        </small>
+        <ChevronDown size={13} aria-hidden="true" />
+      </summary>
+      <ul>
+        {requirements.map((requirement: Data) => {
+          const issue = issues[requirement.id];
+          const history: Data[] = issue?.history ?? [];
+          return (
+            <li key={requirement.id}>
+              <div>
+                <span>{requirement.text}</span>
+                <small>
+                  {issue ? `返工 ${issue.count}/${limit}` : "未返工"}
+                </small>
+              </div>
+              {history.length > 0 && (
+                <details>
+                  <summary>返工记录 · {history.length}</summary>
+                  {history.map((entry: Data, index: number) => (
+                    <p key={index}>
+                      {entry.problem}
+                      {entry.reason ? `（${entry.reason}）` : ""}
+                    </p>
+                  ))}
+                </details>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </details>
+  );
+}
+
+function AgentCallRow({
+  runId,
+  call,
+  onOpen,
+}: {
+  runId: string;
+  call: Data;
+  onOpen: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const detail = useQuery({
+    queryKey: ["agent-call", runId, call.id],
+    queryFn: () => api(`/agent-runs/${runId}/calls/${call.id}`),
+    enabled: open,
+    staleTime: 30000,
+  });
+  return (
+    <details
+      className="agent-call"
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>
+        <span>{toolNames[call.name] ?? call.name}</span>
+        <small>{callState(call.state)}</small>
+        <ChevronDown size={13} aria-hidden="true" />
+      </summary>
+      {call.result?.error && (
+        <p className="agent-call-error">{call.result.error.message}</p>
+      )}
+      {open && (
+        <div className="agent-call-detail">
+          {detail.isPending ? (
+            <small>正在加载参数…</small>
+          ) : detail.isError ? (
+            <small>参数加载失败</small>
+          ) : (
+            <AgentCallDetail call={detail.data} onOpen={onOpen} />
+          )}
+        </div>
+      )}
+    </details>
+  );
+}
+
+function PlanCallDetail({ args }: { args: Data }) {
+  const requirements: Data[] = Array.isArray(args.requirements)
+    ? args.requirements
+    : [];
+  const items: Data[] = Array.isArray(args.items) ? args.items : [];
+  const targets: Data[] = Array.isArray(args.creation_targets)
+    ? args.creation_targets
+    : [];
+  return (
+    <div className="agent-call-plan">
+      {args.output_type && (
+        <p>
+          <span>输出类型</span>
+          <b>{mediaLabels[args.output_type] ?? args.output_type}</b>
+        </p>
+      )}
+      {requirements.length > 0 && (
+        <section className="agent-call-section">
+          <h5>目标要求 · {requirements.length}</h5>
+          <ul>
+            {requirements.map((requirement: Data) => (
+              <li key={requirement.id}>
+                <b>{requirement.id}</b>
+                <span>{requirement.text}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {items.length > 0 && (
+        <section className="agent-call-section">
+          <h5>计划步骤 · {items.length}</h5>
+          <ul>
+            {items.map((item: Data) => (
+              <li key={item.id}>
+                <small data-state={item.state}>
+                  {planStates[item.state] ?? item.state}
+                </small>
+                <span>{item.text}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {targets.length > 0 && (
+        <section className="agent-call-section">
+          <h5>生产目标 · {targets.length}</h5>
+          <ul>
+            {targets.map((target: Data) => (
+              <li key={target.id}>
+                <b>{target.id}</b>
+                <span>
+                  {target.text}
+                  {target.media_type
+                    ? `（${mediaLabels[target.media_type] ?? target.media_type}）`
+                    : ""}
+                  {Array.isArray(target.requirement_ids)
+                    ? ` · ${target.requirement_ids.join("、")}`
+                    : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {args.note && (
+        <p>
+          <span>说明</span>
+          <b>{args.note}</b>
+        </p>
+      )}
+    </div>
+  );
+}
+
+function AgentCallDetail({
+  call,
+  onOpen,
+}: {
+  call: Data;
+  onOpen: (id: string) => void;
+}) {
+  const args: Data =
+    call.arguments && typeof call.arguments === "object" ? call.arguments : {};
+  const result: Data = call.result ?? {};
+  const data: Data = result.data ?? {};
+  const parameters: Data =
+    args.parameters && typeof args.parameters === "object" ? args.parameters : {};
+  const scalarArgs = Object.entries(args).filter(([key, value]) => {
+    if (
+      [
+        "capability_id",
+        "version",
+        "operation_id",
+        "purpose",
+        "candidate_count",
+        "parameters",
+        "inputs",
+        "checks",
+        "rework",
+        "prompt_document",
+        "requirements",
+        "items",
+        "creation_targets",
+        "note",
+        "content",
+      ].includes(key)
+    ) {
+      return false;
+    }
+    return ["string", "number", "boolean"].includes(typeof value) && value !== "";
+  });
+  return (
+    <div className="agent-call-body">
+      {call.name === "update_plan" && <PlanCallDetail args={args} />}
+      {args.capability_id && (
+        <p>
+          <span>能力</span>
+          <b>
+            {args.capability_id}
+            {args.version ? ` · ${args.version}` : ""}
+          </b>
+        </p>
+      )}
+      {args.operation_id && (
+        <p>
+          <span>生产目标</span>
+          <b>{args.operation_id}</b>
+        </p>
+      )}
+      {!!args.candidate_count && (
+        <p>
+          <span>候选</span>
+          <b>{args.candidate_count}</b>
+        </p>
+      )}
+      {args.purpose && (
+        <p>
+          <span>目的</span>
+          <b>{args.purpose}</b>
+        </p>
+      )}
+      {Array.isArray(args.inputs) && args.inputs.length > 0 && (
+        <p>
+          <span>输入</span>
+          <b>
+            {args.inputs
+              .map((ref: Data) => ref.slot ?? ref.asset_id)
+              .join("、")}
+          </b>
+        </p>
+      )}
+      {call.name !== "update_plan" && scalarArgs.length > 0 && (
+        <div className="agent-call-fields">
+          {scalarArgs.map(([key, value]) => (
+            <p key={key}>
+              <span>{argumentLabels[key] ?? key}</span>
+              <b>{String(value)}</b>
+            </p>
+          ))}
+        </div>
+      )}
+      {Object.keys(parameters).length > 0 && (
+        <details>
+          <summary>执行参数</summary>
+          <pre>{JSON.stringify(parameters, null, 2)}</pre>
+        </details>
+      )}
+      {data.task_id && (
+        <p>
+          <span>任务</span>
+          <b>{data.task_id}</b>
+        </p>
+      )}
+      {typeof data.asset_id === "string" && (
+        <p>
+          <span>素材</span>
+          <button type="button" onClick={() => onOpen(data.asset_id)}>
+            查看 {data.asset_id}
+          </button>
+        </p>
+      )}
+      {data.evidence_call_id && (
+        <p>
+          <span>证据</span>
+          <b>{data.evidence_call_id}</b>
+        </p>
+      )}
+      {Array.isArray(args.checks) && args.checks.length > 0 && (
+        <ul className="agent-call-checks">
+          {args.checks.map((check: Data, index: number) => (
+            <li key={index}>
+              <span>{check.requirement_id}</span>
+              <small>{check.outcome === "passed" ? "通过" : check.outcome}</small>
+              <p>{check.observation}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+      {result.error && (
+        <p className="agent-call-error">
+          {result.error.code}：{result.error.message}
+        </p>
+      )}
+      <details>
+        <summary>原始参数与结果（JSON）</summary>
+        <pre>{JSON.stringify({ arguments: args, result }, null, 2)}</pre>
+      </details>
+    </div>
+  );
+}
+
+function callState(state: string) {
+  if (state === "completed") return "完成";
+  if (state === "failed") return "未执行成功";
+  if (state === "waiting") return "等待中";
+  return "处理中";
+}
+
+function errorText(error: Data | string | null | undefined) {
+  if (!error) return "";
+  return typeof error === "string" ? error : error.message ?? "";
 }
 
 function AgentArtifact({
