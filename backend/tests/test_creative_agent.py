@@ -18,8 +18,8 @@ from sqlalchemy import func, select, text
 
 from app.config import ROOT, Settings
 from app.creative_agent import CreativeAgent
-from app.creative_agent_schema import Answer, Creation, Inspect, ResourceScope, Search, StartRun
-from app.creative_agent_scope import protect_active, scoped_asset
+from app.creative_agent_schema import Answer, Creation, Inspect, ResourceScope, Search, StartRun, WorkPlan
+from app.creative_agent_scope import protect_active, require_run_background, scoped_asset
 from app.db import Database
 from app.errors import AppError
 from app.models import (
@@ -32,6 +32,7 @@ from app.models import (
     Execution,
     LLMCall,
     Message,
+    Plan,
     Project,
     ProjectAsset,
     Task,
@@ -40,7 +41,7 @@ from app.models import (
 from app.planner import Planner
 from app.plans import PlanService
 from app.registry import Registry
-from app.schemas import LOCAL_EDIT_TOOL
+from app.schemas import LOCAL_EDIT_TOOL, ExecutePlan, ManualPlan
 from app.storage import Storage
 from app.worker import Worker
 
@@ -279,6 +280,185 @@ class CreativeAgentTests(AgentTestCase):
         async with self.db.session() as s:
             result = await self.agent.tools.resources(s, await s.get(CreativeAgentRun, other))
             self.assertEqual(result["total"], 0)
+
+    async def prepared_creation_plan(self):
+        """A valid Plan created before a later project background edit."""
+        rid = await self.start("生成一张蓝色纸船的插画")
+        async with self.db.transaction() as s:
+            (await s.get(CreativeAgentRun, rid)).state = "running"
+        run = await self.run_record(rid)
+        await self.agent.tools.update_plan(
+            run,
+            SimpleNamespace(id=uid()),
+            WorkPlan(
+                output_type="image",
+                requirements=[{"id": "subject", "text": "蓝色纸船主体"}],
+                items=[{"id": "main", "text": "生成成品"}],
+                creation_targets=[
+                    {
+                        "id": "main",
+                        "text": "蓝色纸船成品",
+                        "media_type": "image",
+                        "requirement_ids": ["subject"],
+                    }
+                ],
+            ),
+            1,
+        )
+        args = Creation(
+            capability_id="image.generate.zimage",
+            operation_id="main",
+            purpose="生成主体",
+            prompt_document={"positive_prompt": "a blue paper boat"},
+        )
+        async with self.db.transaction() as s:
+            step = CreativeAgentStep(run_id=rid, sequence=1, control_version=1)
+            s.add(step)
+            await s.flush()
+            call = CreativeAgentCall(
+                run_id=rid,
+                step_id=step.id,
+                call_id="generate",
+                position=0,
+                name="invoke_creation",
+                arguments=args.model_dump_json(),
+            )
+            s.add(call)
+            await s.flush()
+            call_id = call.id
+        run = await self.run_record(rid)
+        tool, params, refs, metadata, _ = await self.agent.tools.prepare_creation(run, args)
+        plan_row = await self.state.plans.create(
+            self.pid,
+            ManualPlan(
+                tool_id=tool["id"],
+                inputs=refs,
+                parameters=params,
+                candidate_count=1,
+                change_summary="生成主体",
+                conversation_id=self.cid,
+            ),
+            origin="autonomous",
+            agent_run_id=rid,
+            agent_call_id=call_id,
+            control_version=1,
+            tool_version=tool["version"],
+            prompt_metadata=metadata,
+        )
+        return rid, call_id, plan_row
+
+    async def test_project_goal_change_blocks_new_creation_and_keeps_execution_quota(self):
+        rid = await self.start("生成一张蓝色纸船的插画")
+        async with self.db.transaction() as s:
+            project = await s.get(Project, self.pid)
+            project.goal = "新的项目目标：改为红色巨轮"
+            project.revision += 1
+        args = {
+            "capability_id": "image.generate.zimage",
+            "operation_id": "main",
+            "purpose": "生成主体",
+            "prompt_document": {"positive_prompt": "a blue paper boat"},
+        }
+
+        async def provider(request):
+            calls = await self.calls(rid)
+            if not calls:
+                return response(("plan", "update_plan", plan()), ("generate", "invoke_creation", args))
+            return response(
+                ("stop", "finish_run", {"kind": "needs_attention", "message": "项目背景已修改，保留已有成果。"})
+            )
+
+        self.agent.provider = provider
+        await self.agent.drive(rid)
+        run = await self.run_record(rid)
+        results = {call.call_id: call.result for call in await self.calls(rid)}
+        self.assertEqual(results["generate"]["error"]["code"], "project_background_changed")
+        self.assertEqual(run.execution_count, 0)
+        self.assertEqual(run.state, "needs_attention")
+        async with self.db.session() as s:
+            self.assertEqual(await s.scalar(select(func.count()).select_from(Plan)), 0)
+            self.assertEqual(await s.scalar(select(func.count()).select_from(Task)), 0)
+            self.assertEqual(await s.scalar(select(func.count()).select_from(Execution)), 0)
+
+    async def test_project_rename_does_not_block_an_already_validated_submission(self):
+        rid, call_id, plan_row = await self.prepared_creation_plan()
+        async with self.db.transaction() as s:
+            project = await s.get(Project, self.pid)
+            project.name = "重命名后的项目"
+            project.revision += 1
+        result = await self.state.plans.execute(
+            plan_row["id"],
+            ExecutePlan(
+                revision=plan_row["revision"],
+                plan_hash=plan_row["plan_hash"],
+                idempotency_key=uid(),
+            ),
+            agent_call_id=call_id,
+            control_version=1,
+        )
+        async with self.db.session() as s:
+            task = await s.get(Task, result["task_id"])
+            self.assertEqual(task.agent_run_id, rid)
+            self.assertEqual((await self.run_record(rid)).execution_count, 1)
+
+    async def test_background_change_after_plan_creation_is_rejected_at_task_boundary(self):
+        rid, call_id, plan_row = await self.prepared_creation_plan()
+        async with self.db.transaction() as s:
+            project = await s.get(Project, self.pid)
+            project.style = "新的项目风格"
+            project.revision += 1
+        with self.assertRaises(AppError) as error:
+            await self.state.plans.execute(
+                plan_row["id"],
+                ExecutePlan(
+                    revision=plan_row["revision"],
+                    plan_hash=plan_row["plan_hash"],
+                    idempotency_key=uid(),
+                ),
+                agent_call_id=call_id,
+                control_version=1,
+            )
+        self.assertEqual(error.exception.code, "project_background_changed")
+        async with self.db.session() as s:
+            self.assertEqual(await s.scalar(select(func.count()).select_from(Task)), 0)
+            self.assertEqual((await self.run_record(rid)).execution_count, 0)
+
+    async def test_project_context_reports_background_drift_without_exposing_new_values(self):
+        rid = await self.start("原来的创作目标")
+        async with self.db.transaction() as s:
+            project = await s.get(Project, self.pid)
+            project.goal = "新的机密项目目标"
+            project.revision += 1
+        run = await self.run_record(rid)
+        result = await self.agent.tools.get_project_context(run, None, None, 1)
+        status = result["data"]["project_background"]
+        self.assertTrue(status["tracked"])
+        self.assertTrue(status["revision_changed"])
+        self.assertTrue(status["goal_or_style_changed"])
+        self.assertNotIn("新的机密项目目标", json.dumps(result["data"], ensure_ascii=False))
+        self.assertEqual(result["data"]["project"]["goal"], "")
+
+    async def test_legacy_run_without_project_snapshot_is_not_blocked(self):
+        run = SimpleNamespace(goal_snapshot={}, project_id=self.pid)
+        async with self.db.session() as s:
+            await require_run_background(s, run)
+
+    async def test_existing_submission_is_returned_after_background_change(self):
+        rid, task, execution, args = await self.queued_creation()
+        async with self.db.transaction() as s:
+            project = await s.get(Project, self.pid)
+            project.goal = "新的项目目标"
+            project.revision += 1
+        async with self.db.session() as s:
+            call = await s.scalar(
+                select(CreativeAgentCall).where(
+                    CreativeAgentCall.run_id == rid, CreativeAgentCall.name == "invoke_creation"
+                )
+            )
+        repeated = await self.agent.tools.invoke_creation(
+            await self.run_record(rid), call, Creation.model_validate_json(call.arguments), 1
+        )
+        self.assertEqual(repeated["data"]["task_id"], task.id)
 
     async def test_control_batch_is_rejected_before_any_side_effect(self):
         count = 0

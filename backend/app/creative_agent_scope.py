@@ -23,6 +23,53 @@ def require_scope_ready(run):
         )
 
 
+def background_snapshot(run):
+    """The project goal/style the Run started with, not its latest values."""
+    return (run.goal_snapshot or {}).get("project") or {}
+
+
+def background_changed(run, project):
+    """A project rename or reverting an edit is not a background change."""
+    frozen = background_snapshot(run)
+    if not frozen or ("goal" not in frozen and "style" not in frozen):
+        return False  # Runs created before the snapshot existed keep working.
+    return (project.goal or "") != (frozen.get("goal") or "") or (project.style or "") != (frozen.get("style") or "")
+
+
+def background_status(run, project):
+    frozen = background_snapshot(run)
+    tracked = bool(frozen) and ("goal" in frozen or "style" in frozen)
+    return {
+        "tracked": tracked,
+        "frozen_revision": frozen.get("revision"),
+        "current_revision": project.revision,
+        "revision_changed": tracked and project.revision != frozen.get("revision"),
+        "goal_or_style_changed": background_changed(run, project),
+    }
+
+
+async def require_run_background(session, run, project=None):
+    """Submission must use the Run's frozen goal/style, never a newer background."""
+    from .plans import require_project
+
+    project = project or await require_project(session, run.project_id, writable=True)
+    if background_changed(run, project):
+        frozen = background_snapshot(run)
+        raise AppError(
+            "project_background_changed",
+            "项目目标或风格已在本次创作开始后修改。本次创作仍按启动时背景执行；请保留已有成果并结束，结束后再按新背景发起关联创作。",
+            409,
+            {
+                "frozen_revision": frozen.get("revision"),
+                "current_revision": project.revision,
+                "goal_changed": (project.goal or "") != (frozen.get("goal") or ""),
+                "style_changed": (project.style or "") != (frozen.get("style") or ""),
+                "recovery": "keep_results_and_report; start a related Run after this one ends",
+            },
+        )
+    return project
+
+
 def reference_assets(run):
     return or_(
         Asset.id.in_(run.scope.get("selected", [])),

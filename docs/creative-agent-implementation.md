@@ -125,3 +125,26 @@ $env:PYTHONPATH = 'backend;backend/tests'
 $env:PYTHONPATH = 'backend;backend/tests'
 .venv/Scripts/python.exe -X utf8 -m unittest test_creative_agent test_creative_agent_boundaries test_project_library test_public_access test_media_delivery test_task_identity test_task_media test_task_timing -q
 ```
+
+## 项目背景版本核验（2026-11-13）
+
+Run 启动时保存的 `goal_snapshot.project`（目标、风格、revision）是本次创作唯一背景，不再由后续提交静默采用项目的新目标。`preview_creation` 和 `invoke_creation` 在新建方案前比较当前项目的 goal/style；`plans.execute` 在创建 Task / Execution 的同一事务内再次比较，作为真正的提交边界。只改项目名称、或把编辑改回原值，虽然 revision 变化但背景相同，不会阻塞；缺少 `goal_snapshot.project` 的旧 Run 保持兼容。
+
+冲突时返回 `project_background_changed`，附带冻结/当前 revision、变化字段和恢复说明；不创建 Plan / Task / Execution，不消耗创作执行名额。已经提交的任务继续执行，已有成果仍可按原目标检查和交付；只有新的创作提交被拒绝。`get_project_context` 通过 `project_background` 提供 `frozen_revision`、`current_revision`、`revision_changed` 和 `goal_or_style_changed`，但不返回新的目标或风格正文，避免模型把新背景混入旧任务。
+
+代码落点：`backend/app/creative_agent_scope.py` 的背景快照/比较/提交检查，`backend/app/creative_agent_tools.py` 的预检与提交入口，`backend/app/plans.py` 的任务创建边界。自主指引发布 `1.3.0`，1.2.0 保留。回归新增 6 项：目标变化阻止新提交且不占名额、仅改名不阻止、Plan 创建后背景变化在任务边界被拒、上下文只报告漂移不泄露新值、旧 Run 兼容、已提交调用幂等返回原任务。完整自主创作回归通过。
+
+### 重启后的真实验证（2026-11-13）
+
+服务以 `.data/dev` 重启后，健康检查显示 ComfyUI 0.31.0 connected/compatible、11/11 工具 available、模型 `deepseek-v4.1-flash` 已配置；前端生产构建通过。
+
+- 真实图片闭环：`validate_creative_agent.py --generate`，7 次模型请求、1 次生成，模型自主选择 `image.generate.qwen` 1.0.0（fast），交付 512×512 RGB PNG（213,408 字节，sha256 `38a5ad59…cf28`，seed 1394107443563926）；任务 `completed`、执行 `succeeded`、保存 `complete`，6 项要求均基于实际像素检查通过。报告：`.data/agent-validation/bd0a0378-6118-4fc7-b5dc-881c576c51a1/report.json`。
+- 真实背景拦截：新增 `--background` 模式，在模型已经决定提交、执行开始前修改项目目标。5 次模型请求后 `invoke_creation` 返回 `project_background_changed`；Task / Execution 均为 0，执行名额未消耗；后续模型请求看到 `goal_or_style_changed=true`，按 `needs_attention` 说明并保留原目标。报告：`.data/agent-validation/8aad67a6-7a6e-47ef-91bc-7a17b11896d1/report.json`。
+- 本次只验证图片与拦截路径，未运行视频生成；ComfyUI 队列保持空闲，视频验证留待后续单独执行。
+
+复现：
+
+```powershell
+.venv/Scripts/python.exe -X utf8 scripts/validate_creative_agent.py --background
+.venv/Scripts/python.exe -X utf8 scripts/validate_creative_agent.py --generate
+```

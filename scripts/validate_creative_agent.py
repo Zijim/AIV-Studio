@@ -1,8 +1,9 @@
 """Opt-in live smoke check in an isolated workspace, using configured credentials.
 
-python scripts/validate_creative_agent.py [--generate | --scope]
+python scripts/validate_creative_agent.py [--generate | --scope | --background]
 Default: short document. --generate: one 512px image, only when ComfyUI is idle.
 --scope: live material narrowing, with synthetic selected/key documents and no GPU.
+--background: real model attempt blocked by a mid-run project goal change; no GPU.
 --resume DIR: recover an existing isolated media run; never starts a new generation.
 Uses real model calls. Never reads the user's project database or materials.
 """
@@ -27,6 +28,8 @@ from app.models import (
     Conversation,
     CreativeAgentCall,
     CreativeAgentRun,
+    CreativeAgentStep,
+    Execution,
     Project,
     ProjectAsset,
     Task,
@@ -40,7 +43,7 @@ from app.worker import Worker
 from sqlalchemy import select, text
 
 
-async def main(generate, scope_check=False, resume=None):
+async def main(generate, scope_check=False, resume=None, background_check=False):
     settings = load_settings()
     validation_root = (ROOT / ".data" / "agent-validation").resolve()
     root = Path(resume).resolve() if resume else validation_root / uid()
@@ -106,7 +109,9 @@ async def main(generate, scope_check=False, resume=None):
                 session.add(conversation)
                 await session.flush()
         goal = (
-            "生成一张512×512的极简插画：纯白背景中一只橙色纸船，不要文字。只生成一个候选；检查实际画面后交付图片。"
+            "生成一张512×512的纯白背景橙色纸船插画，检查实际画面后交付图片。"
+            if background_check
+            else "生成一张512×512的极简插画：纯白背景中一只橙色纸船，不要文字。只生成一个候选；检查实际画面后交付图片。"
             if generate
             else "请写一份约100字的中文纸船插画创意说明，保存为Markdown文档，检查全文后直接交付，不需要生成图片。"
         )
@@ -160,11 +165,44 @@ async def main(generate, scope_check=False, resume=None):
                     idempotency_key=uid(),
                 ),
             )
+        background = {"changed": False, "call": None}
+        if background_check:
+            original_provider = agent.request_model
+
+            async def background_provider(request):
+                response = await original_provider(request)
+                found = next(
+                    (
+                        item.get("name")
+                        for item in response.get("output", [])
+                        if item.get("type") == "function_call"
+                        and item.get("name") in ("invoke_creation", "preview_creation")
+                    ),
+                    None,
+                )
+                if found and not background["changed"]:
+                    # Change the project only after the model has already decided to
+                    # submit, reproducing a user edit that arrives in flight.
+                    background["changed"] = True
+                    background["call"] = found
+                    async with db.transaction() as session:
+                        current = await session.get(Project, project.id)
+                        current.goal = "背景变化后的新目标：改为红色巨轮"
+                        current.revision += 1
+                return response
+
+            agent.provider = background_provider
         if generate:
             worker_job = asyncio.create_task(worker.run(recover=not bool(resume)))
         agent_job = asyncio.create_task(agent.serve())
         previous = None
-        observation_seconds = max(600, settings.image_timeout_seconds + settings.agent_active_seconds + 60) if generate else 600
+        observation_seconds = (
+            max(600, settings.image_timeout_seconds + settings.agent_active_seconds + 60)
+            if generate
+            else 180
+            if background_check
+            else 600
+        )
         for _ in range(observation_seconds):
             async with db.session() as session:
                 run = await session.get(CreativeAgentRun, result["run_id"])
@@ -227,6 +265,50 @@ async def main(generate, scope_check=False, resume=None):
                         and {item["asset_id"] for item in resources["items"]} == {selected[0]}
                         and run.execution_count == 0
                     )
+                if background_check:
+                    async with db.session() as session:
+                        run_tasks = (await session.scalars(select(Task).where(Task.agent_run_id == run.id))).all()
+                        executions = (
+                            await session.scalars(
+                                select(Execution).where(Execution.task_id.in_([task.id for task in run_tasks]))
+                            )
+                        ).all() if run_tasks else []
+                        steps = (
+                            await session.scalars(
+                                select(CreativeAgentStep).where(CreativeAgentStep.run_id == run.id)
+                            )
+                        ).all()
+                    status_seen = False
+                    for step in steps:
+                        initial = (step.request_data or {}).get("input") or []
+                        try:
+                            data = json.loads(initial[0]["content"]) if initial else {}
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                        status = (data.get("current") or {}).get("project_background") or {}
+                        if status.get("goal_or_style_changed") is True:
+                            status_seen = True
+                            break
+                    blocked = [
+                        call
+                        for call in calls
+                        if ((call.result or {}).get("error") or {}).get("code") == "project_background_changed"
+                    ]
+                    report["background"] = {
+                        "changed_before_call": background["call"],
+                        "changed": background["changed"],
+                        "status_seen_by_model": status_seen,
+                        "blocked_calls": [{"name": call.name, "state": call.state} for call in blocked],
+                        "tasks": len(run_tasks),
+                        "executions": len(executions),
+                    }
+                    report["background_check_passed"] = bool(
+                        background["changed"]
+                        and blocked
+                        and not run_tasks
+                        and not executions
+                        and run.execution_count == 0
+                    )
                 atomic_json(root / "report.json", report)
                 print(
                     json.dumps(
@@ -239,6 +321,8 @@ async def main(generate, scope_check=False, resume=None):
                     ),
                     flush=True,
                 )
+                if background_check:
+                    return 0 if report.get("background_check_passed") else 1
                 return (
                     0
                     if run.state == "completed" and (
@@ -268,6 +352,7 @@ if __name__ == "__main__":
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--generate", action="store_true")
     mode.add_argument("--scope", action="store_true")
+    mode.add_argument("--background", action="store_true")
     mode.add_argument("--resume", type=Path)
     args = parser.parse_args()
-    raise SystemExit(asyncio.run(main(args.generate, args.scope, args.resume)))
+    raise SystemExit(asyncio.run(main(args.generate, args.scope, args.resume, args.background)))

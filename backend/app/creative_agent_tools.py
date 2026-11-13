@@ -18,6 +18,8 @@ from .creative_agent_policy import consumed_evidence, operation_key, production_
 from .creative_agent_schema import TOOL_MODELS, AutonomousVideoDocument
 from .creative_agent_scope import (
     allowed_assets,
+    background_status,
+    require_run_background,
     require_running,
     require_scope_ready,
     resolve_scope_references,
@@ -43,7 +45,7 @@ from .prompt_guides import content_hash
 from .schemas import LOCAL_EDIT_REGION_FIELDS, LOCAL_EDIT_TOOL, ExecutePlan, ManualPlan
 from .storage import atomic_json, file_hash
 
-GUIDE_VERSION = "1.2.0"
+GUIDE_VERSION = "1.3.0"
 QWEN_QUALITY_MENTION = re.compile(r"(?<!\d)50\s*(?:步|steps?\b)|质量(?:档|模式|预设)|\bquality\b", re.I)
 
 
@@ -147,6 +149,9 @@ class AgentTools:
 
     async def get_project_context(self, run, call, args, version):
         async with self.db.session() as session:
+            from .plans import require_project
+
+            project = await require_project(session, run.project_id)
             materials = await self.resources(session, run)
             history = await history_page(
                 session, run, args.history_offset if args else 0, args.history_limit if args else 0
@@ -155,6 +160,7 @@ class AgentTools:
             {
                 "goal": run.goal,
                 "project": run.goal_snapshot["project"],
+                "project_background": background_status(run, project),
                 "selected_roles": run.scope.get("image_roles", {}),
                 "resource_scope": {
                     "policy": run.scope.get("reference_policy", {"state": "resolved", "mode": "available"}),
@@ -370,6 +376,8 @@ class AgentTools:
 
     async def prepare_creation(self, run, args):
         require_scope_ready(run)
+        async with self.db.session() as session:
+            await require_run_background(session, run)
         tool = self.registry.get(args.capability_id, args.version)
         capability = self.capability(tool)
         target = production_operation(run, args.operation_id, tool["id"].split(".")[0]) if run.work_plan else None
@@ -514,6 +522,9 @@ class AgentTools:
             existing = await session.scalar(select(Task).where(Task.agent_call_id == call.id))
             if existing:
                 return await self.creation_result(session, existing)
+            # A task that was already submitted stays valid; only a new submission
+            # must still match the goal/style frozen when the Run started.
+            await require_run_background(session, run)
             old_plan = await session.get(Plan, (call.plan_id, 1)) if call.plan_id else None
         production_operation(run, args.operation_id)
         if old_plan:
@@ -543,7 +554,6 @@ class AgentTools:
                 revision=plan["revision"],
                 plan_hash=plan["plan_hash"],
                 idempotency_key="agent-execute:" + call.id,
-                accept_previous_context=True,
             ),
             agent_call_id=call.id,
             control_version=version,
