@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import re
+import unicodedata
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
@@ -45,8 +46,40 @@ from .prompt_guides import content_hash
 from .schemas import LOCAL_EDIT_REGION_FIELDS, LOCAL_EDIT_TOOL, ExecutePlan, ManualPlan
 from .storage import atomic_json, file_hash
 
-GUIDE_VERSION = "1.3.0"
+GUIDE_VERSION = "1.4.0"
 QWEN_QUALITY_MENTION = re.compile(r"(?<!\d)50\s*(?:步|steps?\b)|质量(?:档|模式|预设)|\bquality\b", re.I)
+REQUIREMENT_PUNCTUATION = re.compile(r"[\s，,。.、；;：:！!？?（）()【】\[\]《》<>“”\"'‘’…—\-_/\\]+")
+
+
+def requirement_key(text):
+    """Compare meaning-preserving text, not incidental punctuation or spacing."""
+    return REQUIREMENT_PUNCTUATION.sub("", unicodedata.normalize("NFKC", text or ""))
+
+
+def requirement_changes(existing, submitted):
+    old = {item["id"]: item for item in existing}
+    new = {item["id"]: item for item in submitted}
+    changes = []
+    for item_id in sorted(set(old) | set(new)):
+        if item_id not in old or item_id not in new:
+            changes.append(
+                {
+                    "id": item_id,
+                    "existing": (old.get(item_id) or {}).get("text"),
+                    "submitted": (new.get(item_id) or {}).get("text"),
+                }
+            )
+        elif requirement_key(old[item_id].get("text")) != requirement_key(new[item_id].get("text")):
+            changes.append(
+                {"id": item_id, "existing": old[item_id].get("text"), "submitted": new[item_id].get("text")}
+            )
+    return changes
+
+
+def observation_key(parameters):
+    """The observation-affecting request, excluding the free-text purpose."""
+    payload = {key: value for key, value in (parameters or {}).items() if key != "purpose"}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
 def creation_document_adapter(tool_id):
@@ -247,9 +280,63 @@ class AgentTools:
         return success(data)
 
     async def inspect_media(self, run, call, args, version):
+        key = observation_key(args.model_dump(exclude={"purpose"}))
         async with self.db.session() as session:
             asset = await scoped_asset(session, run, args.asset_id)
             _, blob, path = await self.verified_source(session, asset.id)
+            prior = None
+            prior_data = {}
+            candidates = (
+                await session.scalars(
+                    select(CreativeAgentCall)
+                    .where(
+                        CreativeAgentCall.run_id == run.id,
+                        CreativeAgentCall.name == "inspect_media",
+                        CreativeAgentCall.state == "completed",
+                    )
+                    .order_by(CreativeAgentCall.created_at)
+                    .limit(50)
+                )
+            ).all()
+            for candidate in candidates:
+                data = (candidate.result or {}).get("data") or {}
+                if data.get("duplicate") or data.get("asset_id") != asset.id:
+                    continue
+                if data.get("blob_id") != blob.sha256:
+                    continue
+                previous_key = data.get("observation_key") or observation_key(data.get("parameters") or {})
+                if previous_key == key:
+                    prior, prior_data = candidate, data
+                    break
+        if prior:
+            return success(
+                {
+                    "duplicate": True,
+                    "duplicate_of": prior.call_id,
+                    "evidence_call_id": prior.call_id,
+                    "observation_key": key,
+                    "asset_id": asset.id,
+                    "blob_id": blob.sha256,
+                    "purpose": args.purpose,
+                    "parameters": args.model_dump(),
+                    "technical": prior_data.get("technical"),
+                    "frames": [],
+                    "hint": (
+                        "本次观察与已有观察参数完全相同，没有产生新证据。"
+                        "请改变裁剪、时间点或采样区间；也可以直接使用 evidence_call_id 所指的已有观察判断或交付。"
+                        "重复相同观察会被计为无进展。"
+                    ),
+                },
+                resources=[
+                    {
+                        "kind": "observation",
+                        "asset_id": asset.id,
+                        "blob_id": blob.sha256,
+                        "call_id": prior.id,
+                        "frames": [],
+                    }
+                ],
+            )
         folder = self.settings.data_dir / "previews" / "agent" / call.id
         data = await asyncio.to_thread(observe, path, asset.media_type, args, folder, self.settings)
         data.update(
@@ -257,6 +344,7 @@ class AgentTools:
             blob_id=blob.sha256,
             purpose=args.purpose,
             evidence_call_id=call.call_id,
+            observation_key=key,
             parameters=args.model_dump(),
         )
         return success(
@@ -689,13 +777,27 @@ class AgentTools:
                 .where(CreativeAgentCall.run_id == run.id, CreativeAgentCall.asset_id.is_not(None))
                 .limit(1)
             )
-            if (run.execution_count or wrote_document) and (
-                run.work_plan.get("requirements") != [r.model_dump() for r in args.requirements]
-                or run.work_plan.get("output_type") != args.output_type
-            ):
-                raise AppError("goal_frozen", "已执行创作后不能更换目标要求、标识或输出类型。", 409)
+            executed = bool(run.execution_count or wrote_document)
+            if executed:
+                submitted = [requirement.model_dump() for requirement in args.requirements]
+                changes = requirement_changes(run.work_plan.get("requirements", []), submitted)
+                output_type_changed = run.work_plan.get("output_type") != args.output_type
+                if changes or output_type_changed:
+                    raise AppError(
+                        "goal_frozen",
+                        "已执行创作后不能更换目标要求、标识或输出类型。",
+                        409,
+                        {
+                            "changed_requirements": changes,
+                            "output_type_changed": output_type_changed,
+                            "hint": "只调整 items 的状态和说明；requirements 需逐字复用（标点和空白差异已容忍）。",
+                        },
+                    )
             old_operations = production_operations(run)
             plan = args.model_dump()
+            if executed:
+                # Keep the originally frozen wording instead of storing punctuation variants.
+                plan["requirements"] = run.work_plan.get("requirements", [])
             if "creation_targets" in args.model_fields_set:
                 proposed = [
                     {**target, "operation_key": operation_key(run.id, target["id"])}
@@ -716,6 +818,7 @@ class AgentTools:
             ))
             if locked:
                 # Compatibility for v1.0 plans, which had no separate targets.
+                # Clearing or changing frozen targets stays an explicit error.
                 if not proposed and any(item.get("media_type") is None for item in old_operations):
                     proposed = old_operations
                 old_by_id = {item["id"]: item for item in old_operations}
@@ -830,6 +933,18 @@ class AgentTools:
                     elif evidence.get("omitted"):
                         await self.check_document_coverage(session, run, asset)
                 run.deliverables = list(dict.fromkeys(args.asset_ids))
+                plan = dict(run.work_plan)
+                items = [dict(item) for item in plan.get("items", [])]
+                if any(item.get("state") != "completed" for item in items):
+                    # A delivered Run must not leave its visible plan showing
+                    # running/pending steps. Preserve the steps, close their state.
+                    for item in items:
+                        item["state"] = "completed"
+                    plan["items"] = items
+                    plan["revision"] = plan.get("revision", 0) + 1
+                    plan["reconciled_at"] = now()
+                    plan["reconciled"] = True
+                    run.work_plan = plan
             run.completion = args.model_dump()
             run.state = "needs_attention" if args.kind == "needs_attention" else "completed"
             run.finished_at = now() if run.state == "completed" else None

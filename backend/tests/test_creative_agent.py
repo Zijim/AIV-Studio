@@ -230,6 +230,8 @@ class CreativeAgentTests(AgentTestCase):
         self.assertEqual(run.state, "completed", run.stop_reason)
         self.assertEqual(run.completion["kind"], "delivered")
         self.assertEqual(run.execution_count, 0)
+        self.assertTrue(all(item.get("state") == "completed" for item in run.work_plan["items"]))
+        self.assertTrue(run.work_plan.get("reconciled"))
         async with self.db.session() as s:
             self.assertEqual(await s.scalar(select(func.count()).select_from(LLMCall)), 0)
             steps = (await s.scalars(select(CreativeAgentStep))).all()
@@ -556,6 +558,98 @@ class CreativeAgentTests(AgentTestCase):
             self.assertEqual([row["id"] for row in filtered], [task.id])
             empty = (await client.get(f"/api/v1/tasks?project_id={self.pid}&agent_run_id={uid()}")).json()
             self.assertEqual(empty, [])
+
+    async def test_duplicate_observation_returns_previous_evidence_without_pixels(self):
+        aid = await self.key_image()
+        rid = await self.start("观察素材")
+        run = await self.run_record(rid)
+        first = await self.agent.tools.inspect_media(
+            run,
+            SimpleNamespace(id=uid(), call_id="inspect-1"),
+            Inspect(asset_id=aid, purpose="全图"),
+            1,
+        )
+        self.assertTrue(first["ok"])
+        self.assertTrue(first["data"]["frames"])
+        async with self.db.transaction() as s:
+            step = CreativeAgentStep(run_id=rid, sequence=1, control_version=1)
+            s.add(step)
+            await s.flush()
+            s.add(
+                CreativeAgentCall(
+                    run_id=rid,
+                    step_id=step.id,
+                    call_id="inspect-1",
+                    position=0,
+                    name="inspect_media",
+                    arguments=json.dumps({"asset_id": aid, "purpose": "全图"}),
+                    state="completed",
+                    result=first,
+                )
+            )
+        second = await self.agent.tools.inspect_media(
+            run,
+            SimpleNamespace(id=uid(), call_id="inspect-2"),
+            Inspect(asset_id=aid, purpose="换个说法再读一次"),
+            1,
+        )
+        self.assertTrue(second["data"]["duplicate"])
+        self.assertEqual(second["data"]["duplicate_of"], "inspect-1")
+        self.assertEqual(second["data"]["evidence_call_id"], "inspect-1")
+        self.assertEqual(second["data"]["frames"], [])
+        self.assertEqual(second["resources"][0]["frames"], [])
+        self.assertIn("没有产生新证据", second["data"]["hint"])
+        cropped = await self.agent.tools.inspect_media(
+            run,
+            SimpleNamespace(id=uid(), call_id="inspect-3"),
+            Inspect(asset_id=aid, purpose="局部", crop=[0, 0, 0.5, 0.5]),
+            1,
+        )
+        self.assertFalse(cropped["data"].get("duplicate"))
+        self.assertTrue(cropped["data"]["frames"])
+
+    async def test_update_plan_tolerates_requirement_punctuation_after_execution(self):
+        rid, task, execution, args = await self.queued_creation()
+        async with self.db.transaction() as s:
+            (await s.get(CreativeAgentRun, rid)).state = "running"
+        run = await self.run_record(rid)
+        current = run.work_plan
+        requirements = [dict(item) for item in current["requirements"]]
+        requirements[0]["text"] = requirements[0]["text"] + "。"
+        items = [dict(item, state="completed") for item in current["items"]]
+        result = await self.agent.tools.update_plan(
+            run,
+            SimpleNamespace(id=uid()),
+            WorkPlan(output_type=current["output_type"], requirements=requirements, items=items),
+            1,
+        )
+        self.assertTrue(result["ok"])
+        updated = await self.run_record(rid)
+        self.assertEqual(updated.work_plan["requirements"], current["requirements"])
+        self.assertTrue(all(item["state"] == "completed" for item in updated.work_plan["items"]))
+
+    async def test_update_plan_rejects_wording_change_with_changed_ids(self):
+        rid, task, execution, args = await self.queued_creation()
+        async with self.db.transaction() as s:
+            (await s.get(CreativeAgentRun, rid)).state = "running"
+        run = await self.run_record(rid)
+        current = run.work_plan
+        requirements = [dict(item) for item in current["requirements"]]
+        requirements[0]["text"] = "完全不同的新要求"
+        items = [dict(item, state="completed") for item in current["items"]]
+        with self.assertRaises(AppError) as error:
+            await self.agent.tools.update_plan(
+                run,
+                SimpleNamespace(id=uid()),
+                WorkPlan(output_type=current["output_type"], requirements=requirements, items=items),
+                1,
+            )
+        self.assertEqual(error.exception.code, "goal_frozen")
+        self.assertEqual(
+            [item["id"] for item in error.exception.details["changed_requirements"]],
+            [current["requirements"][0]["id"]],
+        )
+        self.assertFalse(error.exception.details["output_type_changed"])
 
     async def test_control_batch_is_rejected_before_any_side_effect(self):
         count = 0
