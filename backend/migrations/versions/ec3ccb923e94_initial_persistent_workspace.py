@@ -3,9 +3,8 @@
 Revision ID: ec3ccb923e94
 Revises:
 """
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = 'ec3ccb923e94'
 down_revision = None
