@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     agent_active_seconds: int = Field(default=1800, ge=30, le=14400)
     agent_media_seconds: int = Field(default=60, ge=5, le=180)
     agent_media_max_frames: int = Field(default=1800, ge=30, le=18000)
+    agent_max_composes: int = Field(default=4, ge=1, le=50)
+    agent_compose_max_frames: int = Field(default=720, ge=24, le=2880)
+    agent_compose_seconds: int = Field(default=300, ge=30, le=1800)
 
     @property
     def uses_opencode_go(self) -> bool:

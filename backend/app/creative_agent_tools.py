@@ -9,9 +9,10 @@ from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import TypeAdapter
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from .agent_routing import LiteralText
+from .composition import CompositionError, compose_timeline, save_frame, validate_timeline
 from .config import ROOT
 from .creative_agent_history import capture_history, history_page
 from .creative_agent_media import observe
@@ -46,7 +47,7 @@ from .prompt_guides import content_hash
 from .schemas import LOCAL_EDIT_REGION_FIELDS, LOCAL_EDIT_TOOL, ExecutePlan, ManualPlan
 from .storage import atomic_json, file_hash
 
-GUIDE_VERSION = "1.4.0"
+GUIDE_VERSION = "1.6.0"
 QWEN_QUALITY_MENTION = re.compile(r"(?<!\d)50\s*(?:步|steps?\b)|质量(?:档|模式|预设)|\bquality\b", re.I)
 REQUIREMENT_PUNCTUATION = re.compile(r"[\s，,。.、；;：:！!？?（）()【】\[\]《》<>“”\"'‘’…—\-_/\\]+")
 
@@ -135,6 +136,23 @@ class AgentTools:
         if path.stat().st_size != blob.byte_size or await asyncio.to_thread(file_hash, path) != blob.sha256:
             raise AppError("source_integrity", "素材原文件校验失败，请恢复原文件后再读取或交付。", 409)
         return asset, blob, path
+
+    async def observed(self, session, run, asset_id, blob_id):
+        """A clip may only enter composition after a real decoded observation exists."""
+        calls = (
+            await session.scalars(
+                select(CreativeAgentCall).where(
+                    CreativeAgentCall.run_id == run.id,
+                    CreativeAgentCall.name == "inspect_media",
+                    CreativeAgentCall.state == "completed",
+                )
+            )
+        ).all()
+        for item in calls:
+            data = (item.result or {}).get("data") or {}
+            if data.get("asset_id") == asset_id and data.get("blob_id") == blob_id:
+                return True
+        return False
 
     async def resources(self, session, run, args=None):
         query = (
@@ -429,7 +447,7 @@ class AgentTools:
                     or c["category"] == args.category
                     or (args.category == "image" and c["id"].startswith("image."))
                 ],
-                "unconnected": ["video editing/composition", "standalone voiceover", "mixing", "subtitle composition"],
+                "unconnected": ["standalone voiceover", "mixing", "subtitle composition"],
             }
         )
 
@@ -764,6 +782,253 @@ class AgentTools:
                 effects=[{"type": "document", "id": aid}],
             )
 
+    async def compose_video(self, run, call, args, version):
+        if not run.work_plan:
+            raise AppError("plan_required", "请先声明目标计划与成片目标，再合成。", 409)
+        async with self.db.session() as session:
+            clips = []
+            for ref in args.clips:
+                asset = await scoped_asset(session, run, ref.asset_id)
+                if asset.media_type != "video":
+                    raise AppError(
+                        "compose_source_type", "只有视频素材可以参与合成。", 409, {"asset_id": ref.asset_id}
+                    )
+                _, blob, path = await self.verified_source(session, asset.id)
+                if not await self.observed(session, run, asset.id, blob.sha256):
+                    raise AppError(
+                        "compose_source_unchecked",
+                        "参与合成的镜头必须先完成一次真实画面观察。",
+                        409,
+                        {"asset_id": ref.asset_id},
+                    )
+                clips.append(
+                    {
+                        "asset_id": asset.id,
+                        "path": path,
+                        "blob_id": blob.sha256,
+                        "in_frame": ref.in_frame,
+                        "frames": ref.frames,
+                        "label": ref.label,
+                    }
+                )
+            used = await session.scalar(
+                select(func.count())
+                .select_from(CreativeAgentCall)
+                .where(
+                    CreativeAgentCall.run_id == run.id,
+                    CreativeAgentCall.name == "compose_video",
+                    CreativeAgentCall.id != call.id,
+                )
+            )
+        limit = run.limits.get("composes", self.settings.agent_max_composes)
+        if used >= limit:
+            raise AppError(
+                "compose_limit",
+                "本次创作的合成次数已达上限，请保留已完成部分并说明未完成项。",
+                409,
+                {"limit": limit, "used": used},
+            )
+        if args.target_frames is not None and args.target_frames > self.settings.agent_compose_max_frames:
+            raise AppError(
+                "compose_frames",
+                "目标帧数超过允许的合成上限。",
+                409,
+                {"target_frames": args.target_frames, "limit": self.settings.agent_compose_max_frames},
+            )
+        production_operation(run, args.operation_id, "video")
+        if args.dry_run:
+            try:
+                timeline = validate_timeline(clips, target_frames=args.target_frames)
+            except CompositionError as exc:
+                raise AppError(exc.code, exc.message, 409, exc.details) from exc
+            return success(
+                {
+                    "dry_run": True,
+                    "natural": args.target_frames is None,
+                    "frames": timeline["frames"],
+                    "duration": timeline["frames"] / timeline["fps"],
+                    "width": timeline["width"],
+                    "height": timeline["height"],
+                    "fps": timeline["fps"],
+                    "clips": [
+                        {
+                            "asset_id": item["asset_id"],
+                            "in_frame": item["in_frame"],
+                            "frames": item["frames"],
+                            "available_frames": item["probe"]["frames"],
+                        }
+                        for item in timeline["clips"]
+                    ],
+                }
+            )
+        staged = self.settings.data_dir / "staging" / (call.id + ".mp4")
+        try:
+            result = await asyncio.to_thread(compose_timeline, clips, staged, target_frames=args.target_frames)
+            name = Path(args.output_name).name
+            if not name.lower().endswith(".mp4"):
+                name += ".mp4"
+            aid = await self.storage.ingest(
+                staged,
+                name,
+                run.project_id,
+                origin="composition",
+                role="final",
+                description=f"成片：{result['frames']} 帧 / {result['duration']:.3f} 秒",
+                source_info={
+                    "composition": {
+                        "version": "1.0.0",
+                        "agent_run_id": run.id,
+                        "agent_call_id": call.id,
+                        "operation_id": args.operation_id,
+                        "fps": result["fps"],
+                        "width": result["width"],
+                        "height": result["height"],
+                        "frames": result["frames"],
+                        "duration": result["duration"],
+                        "audio": "native",
+                        "clips": result["clips"],
+                    }
+                },
+                stable_asset_id=str(uuid5(NAMESPACE_URL, "aiv-agent-composition:" + call.id)),
+            )
+        except CompositionError as exc:
+            raise AppError(exc.code, exc.message, 409, exc.details) from exc
+        finally:
+            staged.unlink(missing_ok=True)
+            staged.with_suffix(".json").unlink(missing_ok=True)
+        async with self.db.transaction() as session:
+            stored = await session.get(CreativeAgentCall, call.id)
+            stored.asset_id = aid
+            current = await session.get(CreativeAgentRun, run.id)
+            current.intent = "creation"
+            asset = await session.get(Asset, aid)
+            data = {
+                "asset_id": aid,
+                "blob_id": asset.blob_id,
+                "natural": args.target_frames is None,
+                "frames": result["frames"],
+                "duration": result["duration"],
+                "width": result["width"],
+                "height": result["height"],
+                "fps": result["fps"],
+                "clips": result["clips"],
+            }
+        return success(
+            data,
+            resources=[{"kind": "composition", "asset_id": aid, "blob_id": data["blob_id"]}],
+            effects=[{"type": "asset", "id": aid}],
+        )
+
+    async def extract_frame(self, run, call, args, version):
+        async with self.db.session() as session:
+            asset = await scoped_asset(session, run, args.asset_id)
+            if asset.media_type != "video":
+                raise AppError("frame_source_type", "只能从视频素材抽帧。", 409, {"asset_id": args.asset_id})
+            _, blob, path = await self.verified_source(session, asset.id)
+            source_name = asset.name
+        staged = self.settings.data_dir / "staging" / (call.id + ".png")
+        try:
+            index, total = await asyncio.to_thread(save_frame, path, args.frame_index, staged)
+            name = Path(args.name).name
+            if not name.lower().endswith(".png"):
+                name += ".png"
+            aid = await self.storage.ingest(
+                staged,
+                name,
+                run.project_id,
+                origin="agent_frame",
+                role="candidate",
+                description=f"从 {source_name} 第 {index} 帧抽取",
+                source_info={
+                    "source_asset_id": asset.id,
+                    "source_blob_id": blob.sha256,
+                    "source_name": source_name,
+                    "frame_index": index,
+                    "frames": total,
+                },
+                stable_asset_id=str(uuid5(NAMESPACE_URL, "aiv-agent-frame:" + call.id)),
+            )
+        except CompositionError as exc:
+            raise AppError(exc.code, exc.message, 409, exc.details) from exc
+        finally:
+            staged.unlink(missing_ok=True)
+        async with self.db.transaction() as session:
+            stored = await session.get(CreativeAgentCall, call.id)
+            stored.asset_id = aid
+            current = await session.get(CreativeAgentRun, run.id)
+            current.intent = "creation"
+            image = await session.get(Asset, aid)
+            media = image.media_info
+        return success(
+            {
+                "asset_id": aid,
+                "blob_id": image.blob_id,
+                "frame_index": index,
+                "frames": total,
+                "width": media.get("width"),
+                "height": media.get("height"),
+                "media_type": "image",
+            },
+            resources=[{"kind": "frame", "asset_id": aid, "blob_id": image.blob_id}],
+            effects=[{"type": "asset", "id": aid}],
+        )
+
+    @staticmethod
+    def validate_plan_timing(targets, target_seconds):
+        """Content-first timing: per-shot declarations must add up and stay in bounds."""
+        for target in targets:
+            duration = target.get("duration_seconds")
+            if duration is not None and target.get("media_type") != "video":
+                raise AppError(
+                    "plan_duration",
+                    "只有视频目标可以声明时长。",
+                    409,
+                    {"target_id": target["id"], "media_type": target.get("media_type")},
+                )
+        shots = [
+            target
+            for target in targets
+            if target.get("media_type") == "video" and target.get("duration_seconds") is not None
+        ]
+        if not shots:
+            if target_seconds is not None:
+                raise AppError(
+                    "plan_target",
+                    "声明了成片总时长，就必须同时声明每个分镜的时长。",
+                    409,
+                    {"target_seconds": target_seconds},
+                )
+            return
+        film = target_seconds is not None or len(shots) >= 3
+        if film and not 3 <= len(shots) <= 8:
+            raise AppError(
+                "plan_shots",
+                "成片镜头数必须在 3–8 个之间。",
+                409,
+                {"shots": len(shots)},
+            )
+        total = sum(float(target["duration_seconds"]) for target in shots)
+        if total > 30 + 1e-9:
+            raise AppError(
+                "plan_total",
+                "各镜时长之和超过 30 秒。",
+                409,
+                {"total_seconds": round(total, 2), "over_seconds": round(total - 30, 2)},
+            )
+        if target_seconds is not None:
+            difference = total - float(target_seconds)
+            if abs(difference) > 0.8 + 1e-9:
+                raise AppError(
+                    "plan_target",
+                    "各镜时长之和与用户指定总时长的偏差超过 0.8 秒。",
+                    409,
+                    {
+                        "total_seconds": round(total, 2),
+                        "target_seconds": target_seconds,
+                        "difference": round(difference, 2),
+                    },
+                )
+
     async def update_plan(self, run, call, args, version):
         if len({r.id for r in args.requirements}) != len(args.requirements) or len({i.id for i in args.items}) != len(
             args.items
@@ -782,19 +1047,35 @@ class AgentTools:
                 submitted = [requirement.model_dump() for requirement in args.requirements]
                 changes = requirement_changes(run.work_plan.get("requirements", []), submitted)
                 output_type_changed = run.work_plan.get("output_type") != args.output_type
-                if changes or output_type_changed:
+                target_changed = (
+                    "target_seconds" in args.model_fields_set
+                    and run.work_plan.get("target_seconds") != args.target_seconds
+                )
+                stored_targets = {
+                    item["id"]: item for item in run.work_plan.get("creation_targets", []) if "id" in item
+                }
+                duration_changed = any(
+                    stored_targets.get(item.id, {}).get("duration_seconds") != item.duration_seconds
+                    for item in args.creation_targets
+                    if item.id in stored_targets
+                )
+                if changes or output_type_changed or target_changed or duration_changed:
                     raise AppError(
                         "goal_frozen",
-                        "已执行创作后不能更换目标要求、标识或输出类型。",
+                        "已执行创作后不能更换目标要求、标识、输出类型、分镜时长或总时长。",
                         409,
                         {
                             "changed_requirements": changes,
                             "output_type_changed": output_type_changed,
+                            "target_seconds_changed": target_changed,
+                            "duration_changed": duration_changed,
                             "hint": "只调整 items 的状态和说明；requirements 需逐字复用（标点和空白差异已容忍）。",
                         },
                     )
             old_operations = production_operations(run)
             plan = args.model_dump()
+            if "target_seconds" not in args.model_fields_set:
+                plan["target_seconds"] = run.work_plan.get("target_seconds")
             if executed:
                 # Keep the originally frozen wording instead of storing punctuation variants.
                 plan["requirements"] = run.work_plan.get("requirements", [])
@@ -826,14 +1107,26 @@ class AgentTools:
                     old_by_id[item["id"]].get("media_type") not in (None, item.get("media_type"))
                     or set(old_by_id[item["id"]]["requirement_ids"]) != set(item["requirement_ids"])
                     or old_by_id[item["id"]]["text"] != item["text"]
+                    or old_by_id[item["id"]].get("duration_seconds") != item.get("duration_seconds")
                     for item in proposed if item["id"] in old_by_id
                 ):
                     raise AppError(
                         "creation_targets_frozen",
-                        "生产已经开始，不能新增、改名或重绑生产目标以取得新执行身份。可自由调整计划步骤、说明、工具和参数；重做沿用原目标并关联返工证据。",
+                        "生产已经开始，不能新增、改名、重绑生产目标或改动分镜时长以取得新执行身份。可自由调整计划步骤、说明、工具和参数；重做沿用原目标并关联返工证据。",
                         409,
                         {"existing_creation_targets": old_operations},
                     )
+                if plan.get("target_seconds") != run.work_plan.get("target_seconds"):
+                    raise AppError(
+                        "goal_frozen",
+                        "生产已经开始，不能更换成片总时长。",
+                        409,
+                        {
+                            "stored_target_seconds": run.work_plan.get("target_seconds"),
+                            "submitted_target_seconds": plan.get("target_seconds"),
+                        },
+                    )
+            self.validate_plan_timing(proposed, plan.get("target_seconds"))
             run.work_plan = {
                 **plan, "revision": run.work_plan.get("revision", 0) + 1,
                 "production_operations": proposed, "operations_frozen": locked,
@@ -911,10 +1204,25 @@ class AgentTools:
                         "delivery_checks", "每项目标要求都需要有依据的通过结论；明确问题或关键不确定不能完整交付。", 409
                     )
                 if set(assets) - {check.asset_id for check in args.checks}:
-                    raise AppError("delivery_unchecked", "交付清单中仍有未检查的成果，请逐份核对。", 409)
+                    raise AppError(
+                        "delivery_unchecked",
+                        "交付清单中仍有未检查的成果，请逐份核对。",
+                        409,
+                        {"unchecked_asset_ids": sorted(set(assets) - {check.asset_id for check in args.checks})},
+                    )
                 for check in args.checks:
                     if check.asset_id not in assets:
-                        raise AppError("delivery_evidence", "检查必须对应交付清单中的实际成果。", 409)
+                        raise AppError(
+                            "delivery_evidence",
+                            "检查必须对应交付清单中的实际成果。",
+                            409,
+                            {
+                                "missing_asset_ids": sorted(
+                                    {item.asset_id for item in args.checks} - set(assets)
+                                ),
+                                "delivered_asset_ids": list(assets),
+                            },
+                        )
                     asset = assets[check.asset_id]
                     _, evidence = await consumed_evidence(
                         session,

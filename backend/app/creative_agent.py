@@ -109,6 +109,7 @@ class CreativeAgent:
                 access={"public_access": public_access, "can_manage": not public_access},
                 limits={
                     "executions": self.settings.agent_max_executions,
+                    "composes": self.settings.agent_max_composes,
                     "issue_reworks": self.settings.agent_max_issue_reworks,
                     "model_requests": self.settings.agent_max_model_requests,
                     "tool_calls": self.settings.agent_max_tool_calls,

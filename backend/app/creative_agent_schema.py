@@ -101,6 +101,40 @@ class AutonomousVideoDocument(VideoDocument):
     )
 
 
+class ComposeClip(StrictModel):
+    asset_id: str
+    in_frame: int = Field(default=0, ge=0)
+    frames: int = Field(ge=1, le=480)
+    label: str = Field(default="", max_length=200)
+
+
+class Compose(StrictModel):
+    operation_id: str = Field(
+        min_length=1,
+        max_length=80,
+        description="Copy the stable update_plan.creation_targets[].id of the final film.",
+    )
+    clips: list[ComposeClip] = Field(min_length=1, max_length=12)
+    target_frames: int | None = Field(
+        default=None,
+        ge=24,
+        le=2880,
+        description=(
+            "Optional exact total. Omit for the natural length (sum of every clip's frames). "
+            "When provided it must equal that sum."
+        ),
+    )
+    output_name: str = Field(min_length=1, max_length=120)
+    audio: Literal["native"] = "native"
+    dry_run: bool = Field(default=False, description="Only validate the timeline and report the frame budget.")
+
+
+class Frame(StrictModel):
+    asset_id: str
+    frame_index: int = Field(default=-1, ge=-1, description="-1 saves the last decoded frame.")
+    name: str = Field(min_length=1, max_length=120)
+
+
 class Creation(Capability):
     inputs: list[InputRef] = Field(default_factory=list, max_length=9)
     parameters: dict = Field(
@@ -153,6 +187,15 @@ class PlanItem(Requirement):
 class CreationTarget(Requirement):
     media_type: Literal["image", "video", "audio"]
     requirement_ids: list[str] = Field(min_length=1, max_length=30)
+    duration_seconds: float | None = Field(
+        default=None,
+        ge=4,
+        le=8,
+        description=(
+            "Planned length of this video shot in seconds (4-8). Declare it per shot from the content, "
+            "not by dividing the total evenly. Images and audio targets must leave it empty."
+        ),
+    )
 
 
 class WorkPlan(StrictModel):
@@ -163,6 +206,15 @@ class WorkPlan(StrictModel):
         default_factory=list,
         max_length=30,
         description="Declare stable identities for production outputs, including intermediates, before first generation. Omit this field to keep existing targets when updating the plan. Targets are frozen after production starts. Text-only work needs none.",
+    )
+    target_seconds: float | None = Field(
+        default=None,
+        ge=1,
+        le=30,
+        description=(
+            "Only when the user explicitly asks for a total length. Declared shot durations must then sum "
+            "to this value within 0.8 seconds. Leave empty for 'about N seconds' or no length request."
+        ),
     )
     note: str = Field(default="", max_length=2000)
 
@@ -211,7 +263,7 @@ TOOL_MODELS = {
     ),
     "list_capabilities": (
         Capabilities,
-        "Discover registered production capabilities and actual availability. No video editing, TTS, or subtitle compositor is connected.",
+        "Discover registered production capabilities and actual availability. Clip composition is built in through compose_video; TTS, mixing and subtitle compositor are not connected.",
     ),
     "get_capability": (
         Capability,
@@ -236,7 +288,20 @@ TOOL_MODELS = {
     ),
     "update_plan": (
         WorkPlan,
-        "Declare creation boundary, user-goal requirements and visible work plan. No fixed stages; keep requirement IDs stable. Does not execute generation.",
+        "Declare creation boundary, user-goal requirements and visible work plan. No fixed stages; keep requirement IDs stable. "
+        "For a film, declare each video target's duration_seconds from its content and set target_seconds only when the user named a total. "
+        "Does not execute generation.",
+    ),
+    "compose_video": (
+        Compose,
+        "Compose already-observed video clips from this Run into one final MP4 on a single timeline. "
+        "Validates geometry, frame rate, native audio and clip ranges before encoding; the total may be omitted "
+        "(natural length = sum of clip frames) or given so it must equal that sum. "
+        "dry_run only reports the budget. Returns the saved asset and real metrics.",
+    ),
+    "extract_frame": (
+        Frame,
+        "Save one decoded frame of an authorized video as an image asset, for continuous action continuity or boundary checks.",
     ),
     "ask_user": (
         Ask,
