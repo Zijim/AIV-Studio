@@ -3595,9 +3595,13 @@ details small {
   white-space: pre-wrap;
   color: #e6a16e;
 }
-.agent-activity {
+.agent-activity-group {
   max-inline-size: 42rem;
   margin: 0 auto 16px;
+  display: grid;
+  gap: 6px;
+}
+.agent-activity {
   border: 1px solid #303137;
   border-radius: 9px;
   background: #202125;
@@ -3644,6 +3648,18 @@ details small {
   margin: 5px 0;
   color: #bbb9c0;
   font-size: 11px;
+}
+.agent-creation-tools {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.agent-creation-tools > li {
+  padding: 6px 0;
+  border-top: 1px solid #303137;
+  color: #d3c9c4;
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 .agent-scope {
   font-size: 11px;

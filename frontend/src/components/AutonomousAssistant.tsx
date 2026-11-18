@@ -21,6 +21,7 @@ import {
   Pause,
   Play,
   Square,
+  WandSparkles,
   X,
 } from "lucide-react";
 import { api, clock, type Data, messageSchema, useWorkspace } from "../lib";
@@ -844,49 +845,74 @@ function AgentActivity({
   onOpen: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [creationOpen, setCreationOpen] = useState(false);
   const history = useQuery({
     queryKey: ["agent-activity", runId],
     queryFn: () => api(`/agent-runs/${runId}/activity`),
-    enabled: open,
+    enabled: open || creationOpen,
   });
+  const calls: Data[] | undefined = history.data?.items;
+  const creationCalls = calls?.filter((call) => call.creation_tool_name);
+  const loadStatus = history.isError ? (
+    <p>
+      执行记录暂不可用
+      <Button onClick={() => history.refetch()}>重试</Button>
+    </p>
+  ) : (
+    <p role="status">正在加载执行记录…</p>
+  );
   return (
-    <details
-      className="agent-activity"
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-    >
-      <summary>
-        <ListChecks size={15} aria-hidden="true" />
-        <span>工具调用 {counts.total} 次</span>
-        {counts.failed > 0 && <small>{counts.failed} 次失败</small>}
-        <ChevronDown
-          className="agent-activity-chevron"
-          size={15}
-          aria-hidden="true"
-        />
-      </summary>
-      {open && (
-        <div className="agent-activity-list">
-          {history.data ? (
-            history.data.items.map((call: Data) => (
-              <AgentCallRow
-                key={call.id}
-                runId={runId}
-                call={call}
-                submission={submissions.get(call.id)}
-                onOpen={onOpen}
-              />
-            ))
-          ) : history.isError ? (
-            <p>
-              执行记录暂不可用
-              <Button onClick={() => history.refetch()}>重试</Button>
-            </p>
-          ) : (
-            <p role="status">正在加载执行记录…</p>
-          )}
-        </div>
-      )}
-    </details>
+    <div className="agent-activity-group">
+      <details
+        className="agent-activity"
+        onToggle={(event) => setOpen(event.currentTarget.open)}
+      >
+        <summary>
+          <ListChecks size={15} aria-hidden="true" />
+          <span>工具调用 {counts.total} 次</span>
+          {counts.failed > 0 && <small>{counts.failed} 次失败</small>}
+          <ChevronDown className="agent-activity-chevron" size={15} aria-hidden="true" />
+        </summary>
+        {open && (
+          <div className="agent-activity-list">
+            {calls
+              ? calls.map((call) => (
+                  <AgentCallRow
+                    key={call.id}
+                    runId={runId}
+                    call={call}
+                    submission={submissions.get(call.id)}
+                    onOpen={onOpen}
+                  />
+                ))
+              : loadStatus}
+          </div>
+        )}
+      </details>
+      <details
+        className="agent-activity"
+        onToggle={(event) => setCreationOpen(event.currentTarget.open)}
+      >
+        <summary>
+          <WandSparkles size={15} aria-hidden="true" />
+          <span>创作工具调用</span>
+          <ChevronDown className="agent-activity-chevron" size={15} aria-hidden="true" />
+        </summary>
+        {creationOpen && (
+          <div className="agent-activity-list">
+            {!creationCalls && loadStatus}
+            {creationCalls?.length === 0 && <p>本轮未调用创作工具。</p>}
+            {!!creationCalls?.length && (
+              <ul className="agent-creation-tools">
+                {creationCalls.map((call) => (
+                  <li key={call.id}>{call.creation_tool_name}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </details>
+    </div>
   );
 }
 

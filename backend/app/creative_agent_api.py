@@ -1,6 +1,7 @@
 import json
 
 from fastapi import APIRouter, Query, Request
+from pydantic import TypeAdapter
 from sqlalchemy import select
 
 from .creative_agent_schema import Answer, RunControl, StartRun
@@ -8,8 +9,11 @@ from .creative_agent_scope import TERMINAL_RUNS, scope_summary
 from .errors import AppError
 from .models import Asset, CreativeAgentCall, CreativeAgentRun, row_dict
 from .plans import require_project
+from .registry import Registry
 
 router = APIRouter(prefix="/api/v1")
+CREATION_TOOL_NAMES = {"write_document": "保存创作文档", "extract_frame": "提取视频帧"}
+COMPOSE_DRY_RUN = TypeAdapter(bool)
 
 
 async def run_extras(session, run):
@@ -80,9 +84,33 @@ async def get_run(request: Request, run_id: str):
         return data
 
 
+def creation_tool_name(call: CreativeAgentCall, registry: Registry) -> str | None:
+    if call.name not in ("invoke_creation", "compose_video"):
+        return CREATION_TOOL_NAMES.get(call.name)
+    try:
+        arguments = json.loads(call.arguments)
+        if not isinstance(arguments, dict):
+            return None
+        if call.name == "compose_video":
+            dry_run = COMPOSE_DRY_RUN.validate_python(arguments.get("dry_run", False))
+            return None if dry_run else "视频合成"
+    except (TypeError, ValueError):
+        return None
+
+    capability_id = arguments.get("capability_id")
+    if not isinstance(capability_id, str) or not capability_id.strip():
+        return None
+    version = arguments.get("version")
+    try:
+        return registry.get(capability_id, version if isinstance(version, str) else None)["name"]
+    except AppError:
+        return capability_id
+
+
 @router.get("/agent-runs/{run_id}/activity")
 async def activity(request: Request, run_id: str):
-    async with request.app.state.db.session() as session:
+    state = request.app.state
+    async with state.db.session() as session:
         if not await session.get(CreativeAgentRun, run_id):
             raise AppError("run_not_found", "自主创作记录不存在。", 404)
         calls = (
@@ -99,6 +127,7 @@ async def activity(request: Request, run_id: str):
                     "id": c.id,
                     "call_id": c.call_id,
                     "name": c.name,
+                    "creation_tool_name": creation_tool_name(c, state.registry),
                     "state": c.state,
                     "result": c.result,
                     "created_at": c.created_at,

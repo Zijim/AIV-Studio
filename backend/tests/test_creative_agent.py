@@ -532,11 +532,21 @@ class CreativeAgentTests(AgentTestCase):
             step = CreativeAgentStep(run_id=rid, sequence=4, control_version=1, state="completed")
             session.add(step)
             await session.flush()
-            session.add(
+            recorded_calls = [
+                ("failed-preview", "preview_creation", {"capability_id": "image.edit.qwen.fast"}, "failed"),
+                (
+                    "failed-edit", "invoke_creation",
+                    {"capability_id": "image.edit.qwen.reference", "version": "1.0.0"}, "failed",
+                ),
+                ("compose-preview", "compose_video", {"dry_run": True}, "completed"),
+                ("compose", "compose_video", {"dry_run": False}, "completed"),
+            ]
+            session.add_all(
                 CreativeAgentCall(
-                    run_id=rid, step_id=step.id, call_id="failed-preview", position=0,
-                    name="preview_creation", arguments="{}", state="failed",
+                    run_id=rid, step_id=step.id, call_id=call_id, position=index,
+                    name=name, arguments=json.dumps(arguments), state=state,
                 )
+                for index, (call_id, name, arguments, state) in enumerate(recorded_calls)
             )
         app = FastAPI()
         for key, value in vars(self.state).items():
@@ -560,7 +570,11 @@ class CreativeAgentTests(AgentTestCase):
             detail = (await client.get(f"/api/v1/agent-runs/{rid}")).json()
             self.assertEqual(detail["scope_summary"]["available"], 0)
             activity = (await client.get(f"/api/v1/agent-runs/{rid}/activity")).json()
-            invoke = next(call for call in activity["items"] if call["name"] == "invoke_creation")
+            self.assertEqual(
+                [call["creation_tool_name"] for call in activity["items"] if call["creation_tool_name"]],
+                ["快速文生图", "参考图编辑", "视频合成"],
+            )
+            invoke = next(call for call in activity["items"] if call["call_id"] == "generate")
             call_detail = (await client.get(f"/api/v1/agent-runs/{rid}/calls/{invoke['id']}")).json()
             self.assertEqual(call_detail["arguments"]["capability_id"], "image.generate.zimage")
             self.assertEqual(call_detail["result"]["data"]["task_id"], task.id)
@@ -570,7 +584,7 @@ class CreativeAgentTests(AgentTestCase):
             self.assertEqual(submission["task_id"], task.id)
             self.assertEqual(submission["agent_run_id"], rid)
             self.assertEqual(submission["agent_call_id"], invoke["id"])
-            self.assertEqual(submission["agent_activity"], {"total": len(activity["items"]), "failed": 1})
+            self.assertEqual(submission["agent_activity"], {"total": len(activity["items"]), "failed": 2})
             goal, = (await client.get(f"{history}&limit=1&before={submission['id']}")).json()
             self.assertEqual(goal["role"], "user")
             self.assertEqual(goal["agent_run_id"], rid)
