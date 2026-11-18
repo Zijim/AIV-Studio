@@ -19,6 +19,7 @@ from sqlalchemy import func, select, text
 from app.config import ROOT, Settings
 from app.creative_agent import CreativeAgent
 from app.creative_agent_api import run_extras
+from app.creative_agent_library import organize_existing_creations, recycle_unselected_assets
 from app.creative_agent_schema import Answer, Creation, Document, Inspect, ResourceScope, Search, StartRun, WorkPlan
 from app.creative_agent_scope import protect_active, require_run_background, scope_summary, scoped_asset
 from app.db import Database
@@ -774,15 +775,10 @@ class CreativeAgentTests(AgentTestCase):
                 )
             async with self.db.session() as s:
                 task = await s.scalar(select(Task).where(Task.agent_run_id == rid))
-                asset = await s.scalar(
-                    select(Asset)
-                    .join(Execution, Execution.id == Asset.execution_id)
-                    .where(Execution.task_id == task.id)
-                )
             if calls == 3:
                 return response(("wait", "wait_for_tasks", {"task_ids": [task.id]}))
             if calls == 4:
-                return response(("see", "inspect_media", {"asset_id": asset.id, "purpose": "核对主体"}))
+                return response(("see", "inspect_media", {"asset_id": accepted_id, "purpose": "核对主体"}))
             parts = [
                 p
                 for item in request["input"]
@@ -799,12 +795,12 @@ class CreativeAgentTests(AgentTestCase):
                     "finish_run",
                     {
                         "kind": "delivered",
-                        "asset_ids": [asset.id],
+                        "asset_ids": [accepted_id],
                         "message": "已交付图片",
                         "checks": [
                             {
                                 "requirement_id": "subject",
-                                "asset_id": asset.id,
+                                "asset_id": accepted_id,
                                 "evidence_call_id": "see",
                                 "outcome": "passed",
                                 "observation": "画面主体为蓝色",
@@ -839,9 +835,16 @@ class CreativeAgentTests(AgentTestCase):
             stored.state, stored.result = "completed", repeated
         path = self.settings.data_dir / "staging" / "actual.png"
         Image.new("RGB", (512, 512), "blue").save(path)
-        await self.state.storage.ingest(
+        accepted_id = await self.state.storage.ingest(
             path, "actual.png", self.pid, origin="generated", execution_id=execution.id, role="final", candidate_index=0
         )
+        alternate = self.settings.data_dir / "staging" / "alternate.png"
+        Image.new("RGB", (64, 64), "red").save(alternate)
+        alternate_id = await self.state.storage.ingest(
+            alternate, "alternate.png", self.pid, origin="generated", execution_id=execution.id, role="final"
+        )
+        async with self.db.session() as s:
+            self.assertIsNone((await s.get(ProjectAsset, (self.pid, alternate_id))).removed_at)
         async with self.db.transaction() as s:
             stored = await s.get(Execution, execution.id)
             stored.execution_state, stored.storage_state = "succeeded", "complete"
@@ -852,8 +855,85 @@ class CreativeAgentTests(AgentTestCase):
         self.assertEqual(run.state, "completed", run.stop_reason)
         self.assertEqual(run.execution_count, 1)
         self.assertEqual(run.tool_count, 5)
+        self.assertEqual(run.deliverables, [accepted_id])
         async with self.db.session() as s:
             self.assertEqual(await s.scalar(select(func.count()).select_from(Task)), 1)
+            self.assertIsNone((await s.get(ProjectAsset, (self.pid, accepted_id))).removed_at)
+            self.assertIsNotNone((await s.get(ProjectAsset, (self.pid, alternate_id))).removed_at)
+        _, _, file = await self.state.storage.blob_path(alternate_id)
+        self.assertTrue(file.is_file())
+
+    async def test_historical_candidates_can_be_restored_without_hiding_kept_material(self):
+        import httpx
+        from fastapi import FastAPI
+
+        from app.api import router as api_router
+
+        rid, task, execution, _ = await self.queued_creation()
+        imported_id = await self.key_image()
+        names = ("delivery", "later-delivery", "best", "key", "draft-input", "unused", "frame", "incomplete")
+        ids = {name: uid() for name in names}
+        async with self.db.transaction() as s:
+            source = await s.get(Asset, imported_id)
+            other_project = Project(name="Other project")
+            s.add(other_project)
+            await s.flush()
+            for name in names:
+                s.add(Asset(
+                    id=ids[name], blob_id=source.blob_id, name=f"{name}.png", media_type="image",
+                    origin="generated", role="final",
+                    execution_id=execution.id if name not in ("frame", "incomplete") else None,
+                ))
+            await s.flush()
+            s.add_all(ProjectAsset(project_id=self.pid, asset_id=asset_id) for asset_id in ids.values())
+            s.add(ProjectAsset(project_id=other_project.id, asset_id=ids["unused"]))
+            run = await s.get(CreativeAgentRun, rid)
+            run.state, run.deliverables, run.completion = "completed", [ids["delivery"]], {"kind": "delivered"}
+            task_row = await s.get(Task, task.id)
+            task_row.state, task_row.best_asset_id = "completed", ids["best"]
+            project_plan = await s.get(Plan, (task.plan_id, task.plan_revision))
+            project_plan.state, project_plan.inputs = "draft", [{"asset_id": ids["draft-input"]}]
+            (await s.get(ProjectAsset, (self.pid, ids["key"]))).curated_at = "2026-11-10"
+            related = CreativeAgentRun(
+                project_id=self.pid, conversation_id=self.cid, goal="Deliver an older candidate",
+                goal_snapshot={}, scope={}, access={}, limits={}, state="completed",
+                completion={"kind": "delivered"}, deliverables=[ids["later-delivery"]],
+            )
+            incomplete = CreativeAgentRun(
+                project_id=self.pid, conversation_id=self.cid, goal="Incomplete delivery",
+                goal_snapshot={}, scope={}, access={}, limits={}, state="cancelled",
+            )
+            s.add_all([related, incomplete])
+            await s.flush()
+            for owner, sequence, name in ((rid, 4, "frame"), (incomplete.id, 1, "incomplete")):
+                step = CreativeAgentStep(run_id=owner, sequence=sequence, control_version=1, state="completed")
+                s.add(step)
+                await s.flush()
+                s.add(CreativeAgentCall(
+                    run_id=owner, step_id=step.id, call_id=name, position=0, name="extract_frame",
+                    arguments="{}", state="completed", asset_id=ids[name],
+                ))
+
+        await organize_existing_creations(self.db)
+        app = FastAPI()
+        for key, value in vars(self.state).items():
+            setattr(app.state, key, value)
+        app.include_router(api_router)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            library = f"/api/v1/projects/{self.pid}/assets"
+            active = (await client.get(library)).json()["items"]
+            self.assertEqual({item["id"] for item in active}, set(ids.values()) - {ids["unused"], ids["frame"]} | {imported_id})
+            trash = (await client.get(f"{library}?removed=true")).json()["items"]
+            self.assertEqual({item["id"] for item in trash}, {ids["unused"], ids["frame"]})
+            self.assertTrue(all(item["presence"] == "available" for item in trash))
+            restored = await client.post(f"{library}/{ids['unused']}/restore")
+            self.assertEqual(restored.status_code, 200, restored.text)
+            async with self.db.transaction() as s:
+                self.assertEqual(await recycle_unselected_assets(s, self.pid), [])
+                self.assertIsNone((await s.get(ProjectAsset, (other_project.id, ids["unused"]))).removed_at)
+            active = (await client.get(library)).json()["items"]
+            self.assertIn(ids["unused"], {item["id"] for item in active})
 
     async def test_preview_video_has_no_generation_and_reports_unresolved_seed(self):
         rid = await self.start()

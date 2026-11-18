@@ -77,17 +77,17 @@ def reference_assets(run):
     )
 
 
-def output_assets(run):
+def output_assets(run_ids):
     return exists(
         select(Task.id)
         .join(Execution, Execution.task_id == Task.id)
-        .where(Task.agent_run_id == run.id, Execution.id == Asset.execution_id)
+        .where(Task.agent_run_id.in_(run_ids), Execution.id == Asset.execution_id)
     )
 
 
-def document_assets(run):
+def document_assets(run_ids):
     return exists(
-        select(CreativeAgentCall.id).where(CreativeAgentCall.run_id == run.id, CreativeAgentCall.asset_id == Asset.id)
+        select(CreativeAgentCall.id).where(CreativeAgentCall.run_id.in_(run_ids), CreativeAgentCall.asset_id == Asset.id)
     )
 
 
@@ -107,8 +107,8 @@ def allowed_assets(run, *, protect_pending=False):
         ProjectAsset.removed_at.is_(None),
         or_(
             references,
-            output_assets(run),
-            document_assets(run),
+            output_assets([run.id]),
+            document_assets([run.id]),
         ),
     )
 
@@ -132,8 +132,8 @@ async def scope_summary(session, run):
     key_assets = (
         await count(ProjectAsset.curated_at.is_not(None)) if run.scope.get("use_key_assets", True) else 0
     )
-    run_outputs = await count(output_assets(run))
-    documents = await count(document_assets(run))
+    run_outputs = await count(output_assets([run.id]))
+    documents = await count(document_assets([run.id]))
     rows = (
         await session.execute(
             select(Asset, ProjectAsset)

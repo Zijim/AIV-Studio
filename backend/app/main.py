@@ -18,6 +18,7 @@ from .config import ROOT, load_settings
 from .conversation_api import router as conversation_router
 from .creative_agent import CreativeAgent
 from .creative_agent_api import router as creative_agent_router
+from .creative_agent_library import organize_existing_creations
 from .db import Database
 from .errors import AppError
 from .extensions import router as extension_router
@@ -100,6 +101,7 @@ async def lifespan(app):
     # Storage receipts and task identities must be reconciled before the Agent
     # can decide whether to continue any interrupted creation.
     await state.worker.recover()
+    await organize_existing_creations(db)
     state.creative_agent = CreativeAgent(state)
     worker = asyncio.create_task(state.worker.run(recover=False))
     agent = asyncio.create_task(state.creative_agent.serve())

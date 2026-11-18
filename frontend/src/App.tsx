@@ -23,6 +23,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   ArrowDownToLine,
+  ArrowLeft,
   ArrowUp,
   Archive,
   Check,
@@ -368,6 +369,8 @@ export default function App() {
     enabled: !!project && !!store.selected.length,
   });
   const selected = store.selected.length ? (selectedAssets.data ?? []) : [];
+  const trashCount = facets.data?.trash ?? 0;
+  const focusRemoved = !!(focus?.project?.removed_at || focus?.project_removed);
   const imageCount = selected.filter((a) => a.media_type === "image").length;
   const visionLimit = health.data?.planner.vision_max_images ?? 6;
   const running =
@@ -477,6 +480,20 @@ export default function App() {
   }, [store.projectId]);
   useEffect(() => setPage(0), [store.projectId, search, filter, trash]);
   useEffect(() => {
+    const workspace = useWorkspace.getState();
+    for (const asset of selectedAssets.data ?? []) {
+      if (
+        workspace.selected.includes(asset.id) &&
+        asset.projects?.some(
+          (membership: Data) =>
+            membership.project_id === workspace.projectId && membership.removed_at,
+        )
+      ) {
+        workspace.chooseAsset(asset.id, true);
+      }
+    }
+  }, [selectedAssets.data]);
+  useEffect(() => {
     if (
       projects.data?.length &&
       !projects.data.some((p) => p.id === store.projectId)
@@ -514,23 +531,39 @@ export default function App() {
         return;
       }
       if (
+        type === "library.updated" &&
+        update.payload?.action === "creative.delivered" &&
+        update.project_id === useWorkspace.getState().projectId
+      ) {
+        const recycled = new Set<string>(update.payload.recycled_asset_ids);
+        setPicked((current) => current.filter((id) => !recycled.has(id)));
+        setFocus((current) =>
+          current && !browsingTaskMedia.current && recycled.has(current.id)
+            ? null
+            : current,
+        );
+      }
+      if (
         type === "asset.saved" &&
         update.project_id === useWorkspace.getState().projectId &&
         Date.now() - Date.parse(update.created_at) < 10000
       ) {
         api(`/assets/${update.entity_id}`)
           .then((asset) => {
+            const membership = asset.projects.find(
+              (p: Data) => p.project_id === update.project_id,
+            );
             if (
               !browsingTaskMedia.current &&
               asset.role === "final" &&
               asset.presence === "available" &&
+              membership &&
+              !membership.removed_at &&
               asset.conversation_id ===
                 useWorkspace.getState().conversationId &&
               update.project_id === useWorkspace.getState().projectId
             ) {
-              asset.project = asset.projects.find(
-                (p: Data) => p.project_id === update.project_id,
-              );
+              asset.project = membership;
               setFocus(asset);
               const currentWorkspace = useWorkspace.getState();
               const owner = queryClient
@@ -561,7 +594,7 @@ export default function App() {
                 : type.startsWith("project.")
                   ? ["projects", "assets", "library-facets"]
                   : type.startsWith("library.")
-                    ? ["assets", "library-facets", "detail"]
+                    ? ["assets", "library-facets", "detail", "selected-assets"]
                     : [
                         "assets",
                         "library-facets",
@@ -883,6 +916,20 @@ export default function App() {
     params.delete("tab");
     params.delete("tag");
     navigate(`${location.pathname}?${params}`, { replace: true });
+  }
+
+  function restoreLibraryAsset(asset: Data) {
+    action(
+      "restore-asset",
+      async () => {
+        await api(
+          `/projects/${store.projectId}/assets/${asset.id}/restore`,
+          "POST",
+        );
+        setFocus((current) => (current?.id === asset.id ? null : current));
+      },
+      "素材已恢复",
+    );
   }
 
   async function toggleKey(asset: Data) {
@@ -1348,14 +1395,14 @@ export default function App() {
           {trash ? (
             <div className="library-heading">
               <h2>
-                已移除素材 <span>{assets.data?.total || 0}</span>
+                素材回收站 <span>{trashCount}</span>
               </h2>
               <Button
                 title="返回素材"
                 disabled={!!locatedAsset}
                 onClick={toggleTrash}
               >
-                <Trash2 size={15} />
+                <ArrowLeft size={14} aria-hidden="true" /> 返回素材
               </Button>
             </div>
           ) : (
@@ -1389,10 +1436,13 @@ export default function App() {
               </div>
               <Button
                 title="素材回收站"
-                disabled={!!locatedAsset}
+                aria-label={`素材回收站 ${trashCount} 份`}
+                className="library-trash-entry"
+                disabled={!project || !!locatedAsset}
                 onClick={toggleTrash}
               >
-                <Trash2 size={15} />
+                <Trash2 size={13} aria-hidden="true" /> 回收站{" "}
+                <span>{trashCount}</span>
               </Button>
             </div>
           )}
@@ -1402,9 +1452,11 @@ export default function App() {
               aria-label="搜索素材"
               disabled={!!locatedAsset}
               placeholder={
-                libraryTab === "key"
-                  ? "搜索关键素材、标签、备注…"
-                  : "搜索名称、备注、描述…"
+                trash
+                  ? "搜索回收站…"
+                  : libraryTab === "key"
+                    ? "搜索关键素材、标签、备注…"
+                    : "搜索名称、备注、描述…"
               }
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -1590,9 +1642,9 @@ export default function App() {
             {allAssets.map((a) => {
               const curated = !!a.project?.curated;
               const assetTags: Data[] = a.project?.tags ?? [];
-              const selected = picking
-                ? picked.includes(a.id)
-                : store.selected.includes(a.id);
+              const selected =
+                !trash &&
+                (picking ? picked.includes(a.id) : store.selected.includes(a.id));
               return (
                 <div
                   key={a.id}
@@ -1601,12 +1653,17 @@ export default function App() {
                   className={`asset-card ${selected ? "selected" : ""} ${
                     curated ? "curated" : ""
                   } ${picking ? "picking" : ""}`}
-                  draggable={writable && !picking}
+                  draggable={writable && !picking && !trash}
                   onDragStart={(e) => {
                     e.dataTransfer.setData("text/aiv-asset", a.id);
                     e.dataTransfer.effectAllowed = "copy";
                   }}
                   onClick={(e) => {
+                    if (trash) {
+                      setFocus(a);
+                      setModal("preview");
+                      return;
+                    }
                     if (picking) {
                       togglePicked(a.id);
                       return;
@@ -1618,38 +1675,42 @@ export default function App() {
                     setFocus(a);
                   }}
                   onKeyDown={(e) => {
-                    if (e.key !== "Enter" && e.key !== " ") return;
+                    if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) {
+                      return;
+                    }
                     e.preventDefault();
                     if (picking) togglePicked(a.id);
                     else {
                       setFocus(a);
-                      setModal("asset");
+                      setModal(trash ? "preview" : "asset");
                     }
                   }}
                   onDoubleClick={() => {
                     if (picking) return;
                     setFocus(a);
-                    setModal("asset");
+                    setModal(trash ? "preview" : "asset");
                   }}
                 >
                   <div className="asset-thumb">
                     <Thumb asset={a} />
-                    <button
-                      type="button"
-                      className={`curate-toggle ${curated ? "on" : ""}`}
-                      title={curated ? "移出关键素材" : "加入关键素材"}
-                      aria-label={curated ? "移出关键素材" : "加入关键素材"}
-                      disabled={!writable}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleKey(a);
-                      }}
-                    >
-                      <Star
-                        size={12}
-                        fill={curated ? "currentColor" : "none"}
-                      />
-                    </button>
+                    {!trash && (
+                      <button
+                        type="button"
+                        className={`curate-toggle ${curated ? "on" : ""}`}
+                        title={curated ? "移出关键素材" : "加入关键素材"}
+                        aria-label={curated ? "移出关键素材" : "加入关键素材"}
+                        disabled={!writable}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleKey(a);
+                        }}
+                      >
+                        <Star
+                          size={12}
+                          fill={curated ? "currentColor" : "none"}
+                        />
+                      </button>
+                    )}
                     {selected && (
                       <span className="selected-tick">
                         <Check size={12} />
@@ -1698,7 +1759,22 @@ export default function App() {
                       </span>
                     )}
                     <div className="asset-actions">
-                      {writable && (
+                      {trash && writable && (
+                        <button
+                          type="button"
+                          className="tag-edit restore-asset"
+                          aria-label={`恢复素材 ${a.name}`}
+                          disabled={!!busy || a.presence === "purged"}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            restoreLibraryAsset(a);
+                          }}
+                        >
+                          <RefreshCw size={11} aria-hidden="true" />
+                          恢复
+                        </button>
+                      )}
+                      {!trash && writable && (
                         <button
                           type="button"
                           className="tag-edit"
@@ -1713,7 +1789,7 @@ export default function App() {
                           改名
                         </button>
                       )}
-                      {(libraryTab === "key" || curated) && (
+                      {!trash && (libraryTab === "key" || curated) && (
                         <button
                           type="button"
                           className="tag-edit"
@@ -1990,21 +2066,25 @@ export default function App() {
               )}
               {focus && (
                 <>
-                  <Button
-                    title={
-                      focus.project?.curated ? "移出关键素材" : "加入关键素材"
-                    }
-                    disabled={!writable}
-                    onClick={() => toggleKey(focus)}
-                  >
-                    <Star
-                      size={16}
-                      fill={focus.project?.curated ? "currentColor" : "none"}
-                    />
-                  </Button>
-                  <Button title="素材详情" onClick={() => setModal("asset")}>
-                    <SlidersHorizontal size={16} />
-                  </Button>
+                  {!focusRemoved && (
+                    <>
+                      <Button
+                        title={
+                          focus.project?.curated ? "移出关键素材" : "加入关键素材"
+                        }
+                        disabled={!writable}
+                        onClick={() => toggleKey(focus)}
+                      >
+                        <Star
+                          size={16}
+                          fill={focus.project?.curated ? "currentColor" : "none"}
+                        />
+                      </Button>
+                      <Button title="素材详情" onClick={() => setModal("asset")}>
+                        <SlidersHorizontal size={16} />
+                      </Button>
+                    </>
+                  )}
                   <Button title="来源关系" onClick={() => setModal("lineage")}>
                     <GitBranch size={16} />
                   </Button>
@@ -2077,23 +2157,14 @@ export default function App() {
                 >
                   <ArrowDownToLine size={16} />
                 </Button>
-                {trash ? (
+                {focusRemoved ? (
                   <Button
-                    onClick={() =>
-                      action(
-                        "restore",
-                        () =>
-                          api(
-                            `/projects/${project!.id}/assets/${focus.id}/restore`,
-                            "POST",
-                          ),
-                        "素材已恢复",
-                      )
-                    }
+                    disabled={!writable || !!busy || focus.presence === "purged"}
+                    onClick={() => restoreLibraryAsset(focus)}
                   >
-                    恢复
+                    恢复素材
                   </Button>
-                ) : (
+                ) : !trash && (
                   <Button
                     title="从项目移除，可恢复"
                     disabled={!writable}

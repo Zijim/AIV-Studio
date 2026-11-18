@@ -563,7 +563,9 @@ async def attach_asset(request: Request, project_id: str, asset_id: str):
             raise AppError("asset_not_found", "素材不存在。", 404)
         membership = await s.get(ProjectAsset, (project_id, asset_id))
         if membership:
-            membership.removed_at = None
+            if membership.removed_at:
+                membership.removed_at = None
+                membership.revision += 1
         else:
             s.add(ProjectAsset(project_id=project_id, asset_id=asset_id, usage="reference"))
         await svc(request).storage.index(s, project_id, asset)

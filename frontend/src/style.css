@@ -443,6 +443,12 @@ body.resizing-panels * {
   border-radius: 4px;
   margin-left: 4px;
 }
+.library-heading > .btn {
+  min-height: 28px;
+  padding: 0 6px;
+  font-size: 11px;
+  white-space: nowrap;
+}
 .search-box {
   display: flex;
   align-items: center;
@@ -593,6 +599,7 @@ body.resizing-panels * {
 .library-tabbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 12px 12px 4px;
 }
@@ -627,11 +634,17 @@ body.resizing-panels * {
 .library-tabs button.active span {
   color: #c69d82;
 }
-.library-tabbar > .btn {
-  width: 30px;
-  height: 30px;
-  padding: 0;
+.library-trash-entry.btn {
+  min-height: 30px;
+  padding: 0 6px;
+  gap: 4px;
   flex-shrink: 0;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.library-trash-entry > span {
+  color: #a49b92;
+  font-size: 10px;
 }
 .filter-row {
   flex-wrap: wrap;
@@ -923,6 +936,9 @@ body.resizing-panels * {
   gap: 8px;
   flex-wrap: wrap;
   margin-top: 4px;
+}
+.asset-actions > .restore-asset {
+  color: #e9b17e;
 }
 .tag-edit {
   border: 0;

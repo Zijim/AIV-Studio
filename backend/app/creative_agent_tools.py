@@ -15,6 +15,7 @@ from .agent_routing import LiteralText
 from .composition import CompositionError, compose_timeline, save_frame, validate_timeline
 from .config import ROOT
 from .creative_agent_history import capture_history, history_page
+from .creative_agent_library import recycle_unselected_assets
 from .creative_agent_media import observe
 from .creative_agent_policy import consumed_evidence, operation_key, production_operation, production_operations
 from .creative_agent_schema import TOOL_MODELS, AutonomousVideoDocument
@@ -1268,6 +1269,12 @@ class AgentTools:
             run.stop_reason = (
                 {"code": "agent_report", "message": args.message} if run.state == "needs_attention" else None
             )
+            if args.kind == "delivered":
+                recycled = await recycle_unselected_assets(session, run.project_id, run_id=run.id)
+                record_event(
+                    session, "library.updated", run.project_id, run.id,
+                    action="creative.delivered", recycled_asset_ids=recycled,
+                )
             self.message(
                 session,
                 run,
