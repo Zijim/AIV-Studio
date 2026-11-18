@@ -1,9 +1,12 @@
 import asyncio
 import hashlib
 import json
+import mimetypes
 import os
+import re
 import shutil
-from pathlib import Path
+import unicodedata
+from pathlib import Path, PureWindowsPath
 
 from sqlalchemy import select, text
 
@@ -22,6 +25,20 @@ from .models import (
     row_dict,
     uid,
 )
+
+_INVALID_FILENAME_CHARS = re.compile(r'[\x00-\x1f\x7f-\x9f<>:"/\\|?*\ud800-\udfff]+')
+
+
+def _image_filename_title(value):
+    if not isinstance(value, str):
+        return ""
+    title = unicodedata.normalize("NFC", value)
+    title = " ".join(_INVALID_FILENAME_CHARS.sub(" ", title).split()).strip(" .")
+    mime, _ = mimetypes.guess_type(title)
+    if mime and mime.startswith("image/"):
+        title = Path(title).stem
+    title = title[:24].strip(" .")
+    return "" if PureWindowsPath(title).is_reserved() else title
 
 
 def file_hash(path):
@@ -146,6 +163,7 @@ class Storage:
         inputs=None,
         artifact_id=None,
         stable_asset_id=None,
+        asset_title=None,
     ):
         asset_id = stable_asset_id or uid()
         if stable_asset_id:
@@ -160,6 +178,10 @@ class Storage:
         preview = self.root / "previews" / (asset_id + ".png")
         sha = await asyncio.to_thread(file_hash, staged)
         metadata = await asyncio.to_thread(inspect_file, staged, name, preview)
+        generated_image = origin == "generated" and role == "final" and metadata["media_type"] == "image"
+        extension = Path(name).suffix.lower()[:12] or ".bin"
+        if generated_image:
+            extension = mimetypes.guess_extension(metadata["mime_type"]) or extension
         size = staged.stat().st_size
         target = self.root / "blobs" / sha[:2] / sha
         async with self.file_lock:
@@ -179,7 +201,7 @@ class Storage:
                     byte_size=size,
                     relative_path=target.relative_to(self.root).as_posix(),
                     mime_type=metadata["mime_type"],
-                    extension=Path(name).suffix.lower()[:12] or ".bin",
+                    extension=extension,
                 )
                 session.add(blob)
                 await session.flush()
@@ -218,10 +240,15 @@ class Storage:
                 existing.presence = "available"
                 record_event(session, "asset.saved", project_id, existing.id, asset_id=existing.id)
                 return existing.id
+            filename = Path(name).name
+            if generated_image:
+                filename = await self._generated_image_name(
+                    session, project_id, asset_title, (source_info or {}).get("tool_name"), extension
+                )
             asset = Asset(
                 id=asset_id,
                 blob_id=sha,
-                name=Path(name).name,
+                name=filename,
                 origin=origin,
                 role=role,
                 description=description,
@@ -259,6 +286,22 @@ class Storage:
             await self.index(session, project_id, asset)
             record_event(session, "asset.saved", project_id, asset_id, asset_id=asset_id)
         return asset_id
+
+    async def _generated_image_name(self, session, project_id, asset_title, tool_name, extension):
+        title = _image_filename_title(asset_title)
+        base = title or _image_filename_title(tool_name) or "生成图"
+        names = await session.scalars(
+            select(Asset.name)
+            .join(ProjectAsset, ProjectAsset.asset_id == Asset.id)
+            .where(ProjectAsset.project_id == project_id, Asset.name.endswith(extension, autoescape=True))
+        )
+        occupied = {unicodedata.normalize("NFC", name).casefold() for name in names}
+        filename = f"{base}{extension}" if title else f"{base}-01{extension}"
+        number = 2
+        while filename.casefold() in occupied:
+            filename = f"{base}-{number:02d}{extension}"
+            number += 1
+        return filename
 
     async def tags_for(self, session, project_id, asset_ids):
         """Return normalized tags grouped by asset id for one project."""

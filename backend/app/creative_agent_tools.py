@@ -604,6 +604,8 @@ class AgentTools:
         }
         if target:
             metadata.update(operation_key=target["operation_key"], target_requirement_ids=target["requirement_ids"])
+            if tool["id"].startswith("image.") and target.get("asset_title"):
+                metadata["asset_title"] = target["asset_title"]
         return tool, normalized, refs, metadata, dimensions
 
     async def preview_creation(self, run, call, args, version):
@@ -1079,7 +1081,17 @@ class AgentTools:
             if executed:
                 # Keep the originally frozen wording instead of storing punctuation variants.
                 plan["requirements"] = run.work_plan.get("requirements", [])
+            locked = run.work_plan.get("operations_frozen", False) or bool(
+                await session.scalar(select(Task.id).where(Task.agent_run_id == run.id).limit(1))
+            )
             if "creation_targets" in args.model_fields_set:
+                old_titles = {item["id"]: item.get("asset_title") for item in old_operations}
+                for spec, target in zip(args.creation_targets, plan["creation_targets"], strict=True):
+                    title = target.pop("asset_title")
+                    if locked or "asset_title" not in spec.model_fields_set:
+                        title = old_titles.get(target["id"])
+                    if title and target["media_type"] == "image":
+                        target["asset_title"] = title
                 proposed = [
                     {**target, "operation_key": operation_key(run.id, target["id"])}
                     for target in plan["creation_targets"]
@@ -1094,9 +1106,6 @@ class AgentTools:
                 for target in proposed
             ):
                 raise AppError("creation_targets", "生产目标身份必须唯一，且只能绑定已声明的目标要求。", 409)
-            locked = run.work_plan.get("operations_frozen", False) or bool(await session.scalar(
-                select(Task.id).where(Task.agent_run_id == run.id).limit(1)
-            ))
             if locked:
                 # Compatibility for v1.0 plans, which had no separate targets.
                 # Clearing or changing frozen targets stays an explicit error.

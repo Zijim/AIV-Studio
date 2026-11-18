@@ -576,6 +576,7 @@ class Worker:
                     description = (
                         execution.parameters.get("prompt") or execution.parameters.get("instruction") or "高清放大"
                     )
+                    generation = execution.configuration.get("prompt_generation") or {}
                     await self.storage.ingest(
                         staging,
                         artifact.reference["filename"],
@@ -588,6 +589,7 @@ class Worker:
                         candidate_index=0 if execution.configuration.get("step_count") else execution.candidate_index,
                         inputs=execution.inputs,
                         artifact_id=artifact.id,
+                        asset_title=generation.get("asset_title"),
                     )
                 except Exception as exc:
                     async with self.db.transaction() as session:

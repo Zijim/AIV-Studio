@@ -806,6 +806,12 @@ class GuidedFlow:
                 composition.candidate_count,
             )
             metadata = generation_metadata(guide, route, composition, bindings, params, sections)
+            if route.tool_id.startswith("image."):
+                title = composition.asset_title
+                if self.request.revise_plan and self.request.revise_plan.rewrite_only:
+                    title = (pending.get("prompt_metadata") or {}).get("asset_title") or title
+                if title:
+                    metadata["asset_title"] = title
             metadata.update(self.goals.planned(route))
             metadata["constraint_provenance"] = list(self.policy.audit)
             metadata["assumptions_zh"] = list(dict.fromkeys(metadata["assumptions_zh"] + self.policy.suggestions))

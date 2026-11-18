@@ -1,6 +1,6 @@
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 LOCAL_EDIT_TOOL = "image.edit.qwen.local"
 LOCAL_EDIT_REGION_FIELDS = ("region_x", "region_y", "region_width", "region_height")
@@ -8,6 +8,20 @@ LOCAL_EDIT_REGION_FIELDS = ("region_x", "region_y", "region_width", "region_heig
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+
+def _optional_image_title(value):
+    return value if isinstance(value, str) else None
+
+
+ImageAssetTitle = Annotated[
+    str | None,
+    BeforeValidator(_optional_image_title),
+    Field(
+        description="图片成品短名。用户指定名称时使用该名称，否则按主体或用途命名。"
+        "沿用用户语言，中文通常4–10个字，省略扩展名，例如法师三视图。"
+    ),
+]
 
 
 class ProjectCreate(StrictModel):

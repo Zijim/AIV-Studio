@@ -6,7 +6,7 @@ from pydantic import Field
 
 from .agent_routing import CreativeBrief
 from .prompt_composition import VideoDocument
-from .schemas import InputRef, StrictModel
+from .schemas import ImageAssetTitle, InputRef, StrictModel
 
 
 class StartRun(StrictModel):
@@ -187,6 +187,7 @@ class PlanItem(Requirement):
 class CreationTarget(Requirement):
     media_type: Literal["image", "video", "audio"]
     requirement_ids: list[str] = Field(min_length=1, max_length=30)
+    asset_title: ImageAssetTitle = None
     duration_seconds: float | None = Field(
         default=None,
         ge=4,
@@ -289,6 +290,7 @@ TOOL_MODELS = {
     "update_plan": (
         WorkPlan,
         "Declare creation boundary, user-goal requirements and visible work plan. No fixed stages; keep requirement IDs stable. "
+        "Give each image creation target a short, descriptive asset_title in the user's language. "
         "For a film, declare each video target's duration_seconds from its content and set target_seconds only when the user named a total. "
         "Does not execute generation.",
     ),
