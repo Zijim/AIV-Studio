@@ -2220,6 +2220,14 @@ export default function App() {
               configured={!!health.data?.planner.configured}
               selected={selected}
               messages={chatMessages}
+              earlierMessages={
+                messages.hasNextPage
+                  ? {
+                      loading: messages.isFetchingNextPage,
+                      load: () => void messages.fetchNextPage(),
+                    }
+                  : undefined
+              }
               onError={setToast}
               onOpenAsset={(id) => {
                 action("open-agent-output", async () => {
@@ -2852,6 +2860,18 @@ export default function App() {
           <div className="full-preview">
             <Media asset={focus} />
           </div>
+          {focus.presence === "available" && focus.content_url && (
+            <div className="modal-actions">
+              <a
+                className="btn"
+                href={focus.content_url + "?download=true"}
+                download
+              >
+                <ArrowDownToLine size={14} aria-hidden="true" />
+                下载原文件
+              </a>
+            </div>
+          )}
         </Modal>
       )}
       {modal === "lineage" && focus && (

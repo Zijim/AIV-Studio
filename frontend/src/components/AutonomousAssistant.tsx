@@ -1,7 +1,13 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowDownToLine,
   ArrowUp,
   Check,
   ChevronDown,
@@ -9,6 +15,7 @@ import {
   FileText,
   Film,
   Link2,
+  ListChecks,
   LoaderCircle,
   Maximize2,
   Pause,
@@ -16,9 +23,8 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { api, type Data, messageSchema, useWorkspace } from "../lib";
+import { api, clock, type Data, messageSchema, useWorkspace } from "../lib";
 import { ChatMessage } from "./ChatMessage";
-import { ProgressiveImage } from "./ProgressiveImage";
 import { Button } from "./ui";
 
 const terminal = ["completed", "cancelled", "failed"];
@@ -103,6 +109,8 @@ const planStates: Record<string, string> = {
   completed: "已完成",
 };
 
+type ToolActivityCounts = { total: number; failed: number };
+
 export function AutonomousAssistant({
   projectId,
   conversationId,
@@ -110,6 +118,7 @@ export function AutonomousAssistant({
   configured,
   selected,
   messages,
+  earlierMessages,
   onError,
   onOpenAsset,
 }: {
@@ -119,6 +128,7 @@ export function AutonomousAssistant({
   configured: boolean;
   selected: Data[];
   messages: Data[];
+  earlierMessages?: { loading: boolean; load: () => void };
   onError: (message: string) => void;
   onOpenAsset: (id: string) => void;
 }) {
@@ -127,7 +137,8 @@ export function AutonomousAssistant({
   const [busy, setBusy] = useState(false);
   const [answer, setAnswer] = useState("");
   const useKeys = store.agentKeyAssets?.[conversationId] ?? true;
-  const end = useRef<HTMLDivElement>(null);
+  const conversationPane = useRef<HTMLDivElement>(null);
+  const followLatest = useRef(true);
   // Preserve a submission identity across network errors; edits produce a new one.
   const submission = useRef<{ payload: string; key: string } | null>(null);
   const runs = useQuery({
@@ -146,7 +157,7 @@ export function AutonomousAssistant({
   const activity = useQuery({
     queryKey: ["agent-activity", run?.id],
     queryFn: () => api(`/agent-runs/${run!.id}/activity`),
-    enabled: !!run,
+    enabled: active,
     refetchInterval: active ? 2000 : false,
   });
   const calls: Data[] = activity.data?.items ?? [];
@@ -161,13 +172,31 @@ export function AutonomousAssistant({
   const question = calls.find(
     (c) => c.name === "ask_user" && c.state === "waiting",
   );
+  const activityByRun = new Map<string, ToolActivityCounts>();
+  const submissionByCall = new Map<string, string>();
+  for (const message of messages) {
+    if (message.agent_run_id && message.agent_activity) {
+      activityByRun.set(message.agent_run_id, message.agent_activity);
+    }
+    if (message.agent_call_id) {
+      submissionByCall.set(message.agent_call_id, message.content);
+    }
+  }
+  if (active && run && activity.data) {
+    activityByRun.set(run.id, {
+      total: calls.length,
+      failed: calls.filter((call) => call.state === "failed").length,
+    });
+  }
+  const shownActivity = new Set<string>();
   const draft = store.messageDrafts[conversationId] ?? "";
   useEffect(() => {
     setAnswer("");
     submission.current = null;
   }, [conversationId, question?.id]);
   useEffect(() => {
-    end.current?.scrollIntoView({ block: "nearest" });
+    const pane = conversationPane.current;
+    if (pane && followLatest.current) pane.scrollTop = pane.scrollHeight;
   }, [messages.at(-1)?.id, run?.state]);
   async function perform(action: () => Promise<unknown>) {
     setBusy(true);
@@ -214,7 +243,26 @@ export function AutonomousAssistant({
   }
   return (
     <>
-      <div className="conversation autonomous-conversation">
+      <div
+        className="conversation autonomous-conversation"
+        ref={conversationPane}
+        onScroll={({ currentTarget }) => {
+          followLatest.current =
+            currentTarget.scrollHeight -
+              currentTarget.scrollTop -
+              currentTarget.clientHeight <
+            48;
+        }}
+      >
+        {earlierMessages && (
+          <Button
+            className="load-earlier-messages"
+            disabled={earlierMessages.loading}
+            onClick={earlierMessages.load}
+          >
+            {earlierMessages.loading ? "正在加载…" : "加载更早的消息"}
+          </Button>
+        )}
         {!messages.length && (
           <div className="assistant-intro">
             <h3>说出目标，交给 Agent 推进</h3>
@@ -229,55 +277,67 @@ export function AutonomousAssistant({
             <Button onClick={() => runs.refetch()}>重试</Button>
           </p>
         )}
-        {messages.map((m) => (
-          <ChatMessage
-            key={m.id}
-            role={m.role}
-            content={m.content}
-            createdAt={m.created_at}
-          >
-            {!!m.details?.asset_ids?.length && (
-              <div className="agent-deliverables">
-                {m.details.asset_ids.map((id: string, i: number) => (
-                  <AgentArtifact
-                    key={id}
-                    id={id}
-                    index={i}
-                    onOpen={onOpenAsset}
-                    onError={onError}
-                  />
-                ))}
-              </div>
-            )}
-            {!!m.details?.checks?.length && (
-              <details className="message-details">
-                <summary>
-                  目标检查依据 <ChevronDown size={13} aria-hidden="true" />
-                </summary>
-                <div className="message-details-content">
-                  {m.details.checks.map((check: Data, i: number) => (
-                    <p key={i}>
-                      {check.observation}
-                      {check.coverage && <small>{check.coverage}</small>}
-                    </p>
-                  ))}
-                </div>
-              </details>
-            )}
-            {!!m.details?.limitations?.length && (
-              <details className="message-details">
-                <summary>
-                  检查范围与限制 <ChevronDown size={13} aria-hidden="true" />
-                </summary>
-                <div className="message-details-content">
-                  {m.details.limitations.map((text: string, i: number) => (
-                    <p key={i}>{text}</p>
-                  ))}
-                </div>
-              </details>
-            )}
-          </ChatMessage>
-        ))}
+        {messages.flatMap((m) => {
+          const runId = m.agent_run_id;
+          const counts = activityByRun.get(runId);
+          const showSummary = !!counts?.total && !shownActivity.has(runId);
+          const summary = showSummary ? (
+            <AgentActivity
+              key={`activity-${runId}`}
+              runId={runId}
+              counts={counts}
+              submissions={submissionByCall}
+              onOpen={onOpenAsset}
+            />
+          ) : null;
+          if (showSummary) shownActivity.add(runId);
+          if (counts?.total && m.agent_call_id) return summary;
+          const bubble = (
+            <ChatMessage
+              key={m.id}
+              role={m.role}
+              content={m.content}
+              createdAt={m.created_at}
+            >
+              {!!m.details?.asset_ids?.length && (
+                <AgentDeliverables
+                  ids={m.details.asset_ids}
+                  onOpen={onOpenAsset}
+                  onError={onError}
+                />
+              )}
+              {!!m.details?.checks?.length && (
+                <details className="message-details">
+                  <summary>
+                    目标检查依据 <ChevronDown size={13} aria-hidden="true" />
+                  </summary>
+                  <div className="message-details-content">
+                    {m.details.checks.map((check: Data, i: number) => (
+                      <p key={i}>
+                        {check.observation}
+                        {check.coverage && <small>{check.coverage}</small>}
+                      </p>
+                    ))}
+                  </div>
+                </details>
+              )}
+              {!!m.details?.limitations?.length && (
+                <details className="message-details">
+                  <summary>
+                    检查范围与限制 <ChevronDown size={13} aria-hidden="true" />
+                  </summary>
+                  <div className="message-details-content">
+                    {m.details.limitations.map((text: string, i: number) => (
+                      <p key={i}>{text}</p>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </ChatMessage>
+          );
+          if (!summary) return bubble;
+          return m.role === "user" ? [bubble, summary] : [summary, bubble];
+        })}
         {run && (
           <section
             className="agent-run-card"
@@ -325,6 +385,7 @@ export function AutonomousAssistant({
               </ol>
             )}
             <AgentStageResults
+              key={run.id}
               tasks={taskItems}
               documents={run.documents ?? []}
               active={active}
@@ -365,22 +426,6 @@ export function AutonomousAssistant({
             )}
             {run.state === "paused" && (
               <small>已提交的生成继续保存；恢复后 Agent 才继续推进。</small>
-            )}
-            {!!calls.length && (
-              <details className="agent-activity message-details">
-                <summary>
-                  查看执行活动 · {calls.length}
-                  <ChevronDown size={13} aria-hidden="true" />
-                </summary>
-                {calls.map((call) => (
-                  <AgentCallRow
-                    key={call.id}
-                    runId={run.id}
-                    call={call}
-                    onOpen={onOpenAsset}
-                  />
-                ))}
-              </details>
             )}
           </section>
         )}
@@ -442,7 +487,6 @@ export function AutonomousAssistant({
             </Button>
           </form>
         )}
-        <div ref={end} />
       </div>
       <form className="composer" onSubmit={submit}>
         <div className="agent-scope">
@@ -604,49 +648,62 @@ function AgentStageResults({
   onOpen: (id: string) => void;
   onError: (message: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
   if (!tasks.length && !documents.length) {
     return active ? (
       <p className="agent-stage-empty">正在等待首个阶段成果…</p>
     ) : null;
   }
   return (
-    <section className="agent-stage">
-      <h4>
-        阶段成果
-        <span>
+    <details
+      className="agent-stage"
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>
+        <span>阶段成果</span>
+        <small>
           {tasks.length} 个任务 · {documents.length} 份文档
-        </span>
-      </h4>
-      {tasks.map((task: Data) => (
-        <article className="agent-stage-task" key={task.id}>
-          <header>
-            <strong>{task.title || task.tool_name || "创作任务"}</strong>
-            <small data-state={task.state}>
-              {taskStates[task.state] ?? task.state}
-            </small>
-          </header>
-          <p className="agent-stage-meta">
-            {task.tool_name || "创作工具"}
-            {task.candidate_count ? ` · ${task.candidate_count} 个候选` : ""}
-            {task.error ? ` · ${errorText(task.error)}` : ""}
-          </p>
-          <StageMedia media={task.media ?? {}} onOpen={onOpen} />
-        </article>
-      ))}
-      {documents.length > 0 && (
-        <div className="agent-stage-documents">
-          {documents.map((doc: Data, index: number) => (
-            <AgentArtifact
-              key={doc.asset_id}
-              id={doc.asset_id}
-              index={index}
-              onOpen={onOpen}
-              onError={onError}
-            />
+        </small>
+        <ChevronDown
+          className="agent-stage-chevron"
+          size={14}
+          aria-hidden="true"
+        />
+      </summary>
+      {open && (
+        <div className="agent-stage-content">
+          {tasks.map((task: Data) => (
+            <article className="agent-stage-task" key={task.id}>
+              <header>
+                <strong>{task.title || task.tool_name || "创作任务"}</strong>
+                <small data-state={task.state}>
+                  {taskStates[task.state] ?? task.state}
+                </small>
+              </header>
+              <p className="agent-stage-meta">
+                {task.tool_name || "创作工具"}
+                {task.candidate_count ? ` · ${task.candidate_count} 个候选` : ""}
+                {task.error ? ` · ${errorText(task.error)}` : ""}
+              </p>
+              <StageMedia media={task.media ?? {}} onOpen={onOpen} />
+            </article>
           ))}
+          {documents.length > 0 && (
+            <div className="agent-stage-documents">
+              {documents.map((doc: Data, index: number) => (
+                <AgentArtifact
+                  key={doc.asset_id}
+                  id={doc.asset_id}
+                  index={index}
+                  onOpen={onOpen}
+                  onError={onError}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
-    </section>
+    </details>
   );
 }
 
@@ -775,13 +832,73 @@ function AgentRework({ run }: { run: Data }) {
   );
 }
 
+function AgentActivity({
+  runId,
+  counts,
+  submissions,
+  onOpen,
+}: {
+  runId: string;
+  counts: ToolActivityCounts;
+  submissions: ReadonlyMap<string, string>;
+  onOpen: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const history = useQuery({
+    queryKey: ["agent-activity", runId],
+    queryFn: () => api(`/agent-runs/${runId}/activity`),
+    enabled: open,
+  });
+  return (
+    <details
+      className="agent-activity"
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>
+        <ListChecks size={15} aria-hidden="true" />
+        <span>工具调用 {counts.total} 次</span>
+        {counts.failed > 0 && <small>{counts.failed} 次失败</small>}
+        <ChevronDown
+          className="agent-activity-chevron"
+          size={15}
+          aria-hidden="true"
+        />
+      </summary>
+      {open && (
+        <div className="agent-activity-list">
+          {history.data ? (
+            history.data.items.map((call: Data) => (
+              <AgentCallRow
+                key={call.id}
+                runId={runId}
+                call={call}
+                submission={submissions.get(call.id)}
+                onOpen={onOpen}
+              />
+            ))
+          ) : history.isError ? (
+            <p>
+              执行记录暂不可用
+              <Button onClick={() => history.refetch()}>重试</Button>
+            </p>
+          ) : (
+            <p role="status">正在加载执行记录…</p>
+          )}
+        </div>
+      )}
+    </details>
+  );
+}
+
 function AgentCallRow({
   runId,
   call,
+  submission,
   onOpen,
 }: {
   runId: string;
   call: Data;
+  submission?: string;
   onOpen: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -797,7 +914,10 @@ function AgentCallRow({
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary>
-        <span>{toolNames[call.name] ?? call.name}</span>
+        {call.created_at && (
+          <time dateTime={call.created_at}>{clock(call.created_at)}</time>
+        )}
+        <span>{submission ?? toolNames[call.name] ?? call.name}</span>
         <small>{callState(call.state)}</small>
         <ChevronDown size={13} aria-hidden="true" />
       </summary>
@@ -1043,6 +1163,70 @@ function errorText(error: Data | string | null | undefined) {
   return typeof error === "string" ? error : error.message ?? "";
 }
 
+function AgentDeliverables({
+  ids,
+  onOpen,
+  onError,
+}: {
+  ids: string[];
+  onOpen: (id: string) => void;
+  onError: (text: string) => void;
+}) {
+  const gallery = useRef<HTMLDivElement>(null);
+  const galleryId = useId();
+  const [columns, setColumns] = useState(1);
+  const [showAll, setShowAll] = useState(false);
+  useLayoutEffect(() => {
+    const node = gallery.current;
+    if (!node) return;
+    function updateColumns(width: number) {
+      // Each card needs 136px and adjacent cards have a 10px gap.
+      setColumns(width >= 428 ? 3 : width >= 282 ? 2 : 1);
+    }
+    updateColumns(node.clientWidth);
+    const observer = new ResizeObserver(([entry]) =>
+      updateColumns(entry.contentRect.width),
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  const visibleCount = columns * 3;
+  const visibleIds = showAll ? ids : ids.slice(0, visibleCount);
+  return (
+    <div className="agent-deliverables" ref={gallery}>
+      <div
+        className="agent-artifact-grid"
+        id={galleryId}
+        style={{
+          gridTemplateColumns: `repeat(${Math.min(columns, ids.length)}, minmax(0, 210px))`,
+        }}
+      >
+        {visibleIds.map((id, index) => (
+          <AgentArtifact
+            key={id}
+            id={id}
+            index={index}
+            onOpen={onOpen}
+            onError={onError}
+          />
+        ))}
+      </div>
+      {ids.length > visibleCount && (
+        <Button
+          className="agent-show-all"
+          type="button"
+          aria-controls={galleryId}
+          aria-expanded={showAll}
+          onClick={() => setShowAll((current) => !current)}
+        >
+          {showAll ? "收起成果" : `查看全部 ${ids.length} 项`}
+          <ChevronDown size={13} aria-hidden="true" />
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function AgentArtifact({
   id,
   index,
@@ -1060,62 +1244,70 @@ function AgentArtifact({
   });
   const value = asset.data;
   const name = value?.name || `成果 ${index + 1}`;
-  const openLabel = `查看${value?.media_type === "text" ? "文档" : "成果"} ${index + 1}`;
+  const isDocument = value?.media_type === "text";
+  const isVideo = value?.media_type === "video";
+  const previewSrc =
+    value?.preview_url ??
+    (value?.media_type === "image" ? value.content_url : undefined);
   const referenced = useWorkspace((s) => s.selected.includes(id));
   return (
     <div className="agent-artifact">
-      {value?.media_type === "image" && (
-        <button
-          className="agent-artifact-preview"
-          type="button"
-          aria-label={`预览${name}`}
-          onClick={() => onOpen(id)}
-        >
-          <img
-            src={value.preview_url ?? value.content_url}
-            alt={name}
-            width={value.media_info?.width}
-            height={value.media_info?.height}
-            loading="lazy"
-            decoding="async"
-          />
-          <span className="agent-artifact-expand" aria-hidden="true">
-            <Maximize2 size={13} />
-          </span>
-        </button>
-      )}
-      {value?.media_type === "video" && (
-        <video
-          src={value.content_url}
-          poster={value.preview_url}
-          controls
-          preload="metadata"
-          aria-label={name}
-        />
-      )}
-      {value?.media_type === "text" && (
+      {isDocument ? (
         <details className="agent-artifact-document">
-          <summary>
+          <summary title={name}>
             <FileText size={15} aria-hidden="true" />
             <span>{name}</span>
             <ChevronDown size={13} aria-hidden="true" />
           </summary>
-          <pre>{value.media_info?.text_preview}</pre>
+          <pre>
+            {value.media_info?.text_preview || value.media_info?.preview_error}
+          </pre>
         </details>
-      )}
-      {asset.isPending && (
-        <div className="agent-artifact-status" role="status">
-          <LoaderCircle size={14} className="spin" aria-hidden="true" />
-          正在加载成果…
-        </div>
-      )}
-      {asset.isError && (
-        <div className="agent-artifact-status">成果预览暂不可用</div>
+      ) : (
+        <button
+          className="agent-artifact-preview"
+          type="button"
+          aria-label={`预览${name}`}
+          disabled={!value}
+          onClick={() => onOpen(id)}
+        >
+          {previewSrc ? (
+            <img src={previewSrc} alt="" loading="lazy" decoding="async" />
+          ) : (
+            <span
+              className="agent-artifact-status"
+              role={asset.isPending ? "status" : undefined}
+            >
+              {asset.isPending ? (
+                <>
+                  <LoaderCircle size={14} className="spin" aria-hidden="true" />
+                  正在加载成果…
+                </>
+              ) : isVideo ? (
+                <Film size={24} aria-hidden="true" />
+              ) : (
+                <span>成果预览暂不可用</span>
+              )}
+            </span>
+          )}
+          {value && (
+            <span className="agent-artifact-expand" aria-hidden="true">
+              {isVideo ? <Play size={13} /> : <Maximize2 size={13} />}
+            </span>
+          )}
+        </button>
       )}
       <div className="agent-artifact-actions">
+        {!isDocument && (
+          <span className="agent-artifact-name" title={name}>
+            {name}
+          </span>
+        )}
         <Button
           className="agent-artifact-reference"
           type="button"
+          disabled={value?.presence !== "available"}
+          aria-label={`${referenced ? "取消引用" : "引用"}${name}`}
           aria-pressed={referenced}
           onClick={() => useWorkspace.getState().chooseAsset(id, true)}
         >
@@ -1124,37 +1316,37 @@ function AgentArtifact({
           ) : (
             <Link2 size={13} aria-hidden="true" />
           )}
-          {referenced ? "已引用" : "引用此成果"}
+          {referenced ? "已引用" : "引用"}
         </Button>
-        <Button type="button" aria-label={openLabel} onClick={() => onOpen(id)}>
-          <Maximize2 size={12} aria-hidden="true" />
-          查看
-        </Button>
-        {value?.media_type === "text" && (
-          <Button
-            type="button"
-            onClick={async () => {
-              try {
-                const response = await fetch(`/api/v1/assets/${id}/content`);
-                if (!response.ok) throw new Error("读取文档失败");
-                await navigator.clipboard.writeText(await response.text());
-              } catch (error) {
-                onError((error as Error).message);
-              }
-            }}
-          >
-            <Copy size={13} aria-hidden="true" />
-            复制正文
-          </Button>
+        {isDocument && (
+          <>
+            <Button
+              type="button"
+              aria-label={`查看${name}`}
+              title="查看文档"
+              onClick={() => onOpen(id)}
+            >
+              <Maximize2 size={13} aria-hidden="true" />
+            </Button>
+            <Button
+              type="button"
+              aria-label={`复制${name}正文`}
+              title="复制正文"
+              disabled={value.presence !== "available"}
+              onClick={async () => {
+                try {
+                  const response = await fetch(value.content_url);
+                  if (!response.ok) throw new Error("读取文档失败");
+                  await navigator.clipboard.writeText(await response.text());
+                } catch (error) {
+                  onError((error as Error).message);
+                }
+              }}
+            >
+              <Copy size={13} aria-hidden="true" />
+            </Button>
+          </>
         )}
-        <a
-          className="btn"
-          href={`/api/v1/assets/${id}/content?download=true`}
-          download
-        >
-          <ArrowDownToLine size={13} aria-hidden="true" />
-          下载
-        </a>
       </div>
     </div>
   );

@@ -3545,8 +3545,7 @@ details small {
 }
 .agent-run-heading,
 .agent-controls,
-.agent-scope,
-.agent-activity > div {
+.agent-scope {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3597,17 +3596,54 @@ details small {
   color: #e6a16e;
 }
 .agent-activity {
-  margin-top: 10px;
+  max-inline-size: 42rem;
+  margin: 0 auto 16px;
+  border: 1px solid #303137;
+  border-radius: 9px;
+  background: #202125;
 }
-.agent-activity > div {
-  flex-wrap: wrap;
-  border-top: 1px solid #8882;
-  padding: 7px 0;
+.agent-activity > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-block-size: 36px;
+  padding: 5px 10px;
+  color: #d3c9c4;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
 }
-.agent-activity p {
-  flex-basis: 100%;
-  margin: 0;
-  opacity: 0.7;
+.agent-activity > summary::-webkit-details-marker {
+  display: none;
+}
+.agent-activity > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: inherit;
+}
+.agent-activity > summary > svg {
+  flex-shrink: 0;
+  color: #b8a99f;
+}
+.agent-activity > summary > span {
+  flex: 1;
+}
+.agent-activity > summary > small {
+  color: #f0aaa0;
+  font-size: 11px;
+}
+.agent-activity[open] > summary .agent-activity-chevron {
+  transform: rotate(180deg);
+}
+.agent-activity-list {
+  min-inline-size: 0;
+  padding: 0 10px 4px;
+}
+.agent-activity-list > p {
+  margin: 5px 0;
+  color: #bbb9c0;
+  font-size: 11px;
 }
 .agent-scope {
   font-size: 11px;
@@ -3638,10 +3674,24 @@ details small {
   width: 100%;
   min-height: 80px;
 }
+.autonomous-conversation .chat-message:has(.agent-deliverables) .message-bubble {
+  inline-size: 100%;
+}
 .agent-deliverables {
+  min-inline-size: 0;
+}
+.agent-artifact-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
+  align-items: start;
+  gap: 10px;
+}
+.agent-show-all {
+  margin-block-start: 6px;
+  min-block-size: 30px;
+  color: #eab58f;
+}
+.agent-show-all[aria-expanded="true"] svg {
+  transform: rotate(180deg);
 }
 .agent-artifact {
   min-inline-size: 0;
@@ -3652,30 +3702,31 @@ details small {
 }
 .agent-artifact-preview {
   position: relative;
-  display: block;
+  display: grid;
+  place-items: center;
   inline-size: 100%;
+  aspect-ratio: 4 / 3;
   background: #17181a;
 }
 .agent-artifact-preview:focus-visible {
   outline-offset: -3px;
   z-index: 1;
 }
-.agent-artifact-preview img,
-.agent-artifact > video {
+.agent-artifact-preview img {
+  position: absolute;
+  inset: 0;
   display: block;
   inline-size: 100%;
-  block-size: auto;
-  max-block-size: min(340px, 42vh);
-  background: #17181a;
+  block-size: 100%;
   object-fit: contain;
 }
 .agent-artifact-expand {
   position: absolute;
-  inset: auto 8px 8px auto;
+  inset: auto 6px 6px auto;
   display: grid;
   place-items: center;
-  inline-size: 27px;
-  block-size: 27px;
+  inline-size: 23px;
+  block-size: 23px;
   border: 1px solid #ffffff24;
   border-radius: 7px;
   background: #17181ad9;
@@ -3688,19 +3739,26 @@ details small {
 .agent-artifact-actions {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 3px;
-  padding: 5px;
+  gap: 4px;
+  padding: 3px 5px;
   border-top: 1px solid #303136;
 }
+.agent-artifact-name {
+  min-inline-size: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
 .agent-artifact-actions .btn {
-  min-height: 30px;
-  gap: 4px;
-  padding: 4px 6px;
+  flex-shrink: 0;
+  min-height: 28px;
+  gap: 3px;
+  padding: 3px 4px;
   font-size: 11px;
 }
 .agent-artifact-reference {
-  margin-inline-end: auto;
   color: #eab58f;
   background: #312820;
 }
@@ -3718,14 +3776,19 @@ details small {
 }
 .agent-artifact-document > summary {
   justify-content: flex-start;
-  padding: 10px;
+  padding: 8px;
   color: #d9c1ae;
   font-size: 12px;
 }
 .agent-artifact-document > summary span {
   flex: 1;
   min-inline-size: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-artifact-document > summary > svg {
+  flex-shrink: 0;
 }
 .agent-artifact pre {
   max-height: 200px;
@@ -3745,6 +3808,7 @@ details small {
   border-top: 1px solid #8882;
 }
 .agent-scope-summary > summary,
+.agent-stage > summary,
 .agent-rework > summary {
   display: flex;
   align-items: center;
@@ -3754,20 +3818,24 @@ details small {
   list-style: none;
 }
 .agent-scope-summary > summary::-webkit-details-marker,
+.agent-stage > summary::-webkit-details-marker,
 .agent-rework > summary::-webkit-details-marker,
 .agent-call > summary::-webkit-details-marker {
   display: none;
 }
 .agent-scope-summary > summary span,
+.agent-stage > summary span,
 .agent-rework > summary span {
   flex: 1;
 }
 .agent-scope-summary > summary small,
+.agent-stage > summary small,
 .agent-rework > summary small {
   color: #a4a2ab;
   font-size: 11px;
 }
 .agent-scope-summary[open] > summary svg:last-child,
+.agent-stage[open] > summary .agent-stage-chevron,
 .agent-rework[open] > summary svg:last-child,
 .agent-call[open] > summary svg:last-child {
   transform: rotate(180deg);
@@ -3821,18 +3889,18 @@ details small {
   color: #a4a2ab;
   font-size: 10px;
 }
-.agent-stage h4 {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  margin: 0 0 7px;
-  font-size: 12px;
+.agent-stage > summary {
+  min-block-size: 28px;
 }
-.agent-stage h4 span {
-  color: #a4a2ab;
-  font-size: 10px;
-  font-weight: 400;
+.agent-stage > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.agent-stage-chevron {
+  flex-shrink: 0;
+}
+.agent-stage-content {
+  margin-top: 7px;
 }
 .agent-stage-task {
   margin: 0 0 7px;
@@ -3982,10 +4050,21 @@ details small {
 }
 .agent-call > summary span {
   flex: 1;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
 }
-.agent-call > summary small {
+.agent-call > summary small,
+.agent-call > summary time {
   color: #a4a2ab;
-  font-size: 10px;
+  font-size: 11px;
+}
+.agent-call > summary time {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.agent-call > summary > svg {
+  flex-shrink: 0;
 }
 .agent-call-detail {
   padding-top: 5px;

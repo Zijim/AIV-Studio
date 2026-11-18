@@ -19,6 +19,8 @@ from .models import (
     Asset,
     AssetRelation,
     Blob,
+    CreativeAgentCall,
+    CreativeAgentRun,
     Event,
     Execution,
     ImportBatch,
@@ -988,7 +990,56 @@ async def messages(
                 )
             )
         rows = (await s.scalars(query.order_by(Message.created_at.desc(), Message.id.desc()).limit(limit))).all()
-        return [row_dict(m) for m in reversed(rows)]
+        items = [row_dict(m) for m in reversed(rows)]
+        if conversation.mode != "autonomous":
+            return items
+
+        # Submission messages already carry a task ID, including in older conversations.
+        task_ids = {item["task_id"] for item in items if item["role"] == "system" and item["task_id"]}
+        task_calls = {}
+        if task_ids:
+            task_calls = {
+                task_id: (run_id, call_id)
+                for task_id, run_id, call_id in await s.execute(
+                    select(Task.id, Task.agent_run_id, Task.agent_call_id).where(
+                        Task.id.in_(task_ids),
+                        Task.project_id == project_id,
+                        Task.conversation_id == conversation.id,
+                        Task.agent_run_id.is_not(None),
+                    )
+                )
+            }
+        message_runs = []
+        for item in items:
+            task_run, call_id = task_calls.get(item["task_id"], (None, None))
+            run_id = task_run or (item["details"] or {}).get("agent_run_id")
+            message_runs.append((run_id if isinstance(run_id, str) else None, call_id))
+        run_ids = {run_id for run_id, _ in message_runs if run_id}
+        if not run_ids:
+            return items
+        activity = {
+            run_id: {"total": total, "failed": failed}
+            for run_id, total, failed in await s.execute(
+                select(
+                    CreativeAgentRun.id,
+                    func.count(CreativeAgentCall.id),
+                    func.count(CreativeAgentCall.id).filter(CreativeAgentCall.state == "failed"),
+                )
+                .outerjoin(CreativeAgentCall, CreativeAgentCall.run_id == CreativeAgentRun.id)
+                .where(
+                    CreativeAgentRun.id.in_(run_ids),
+                    CreativeAgentRun.project_id == project_id,
+                    CreativeAgentRun.conversation_id == conversation.id,
+                )
+                .group_by(CreativeAgentRun.id)
+            )
+        }
+        for item, (run_id, call_id) in zip(items, message_runs, strict=True):
+            if run_id in activity:
+                item.update(agent_run_id=run_id, agent_activity=activity[run_id])
+                if call_id and item["role"] == "system":
+                    item["agent_call_id"] = call_id
+        return items
 
 
 @router.post("/projects/{project_id}/messages", status_code=202)

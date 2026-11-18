@@ -528,6 +528,16 @@ class CreativeAgentTests(AgentTestCase):
         from app.creative_agent_api import router as agent_router
 
         rid, task, execution, args = await self.queued_creation()
+        async with self.db.transaction() as session:
+            step = CreativeAgentStep(run_id=rid, sequence=4, control_version=1, state="completed")
+            session.add(step)
+            await session.flush()
+            session.add(
+                CreativeAgentCall(
+                    run_id=rid, step_id=step.id, call_id="failed-preview", position=0,
+                    name="preview_creation", arguments="{}", state="failed",
+                )
+            )
         app = FastAPI()
         for key, value in vars(self.state).items():
             setattr(app.state, key, value)
@@ -554,6 +564,29 @@ class CreativeAgentTests(AgentTestCase):
             call_detail = (await client.get(f"/api/v1/agent-runs/{rid}/calls/{invoke['id']}")).json()
             self.assertEqual(call_detail["arguments"]["capability_id"], "image.generate.zimage")
             self.assertEqual(call_detail["result"]["data"]["task_id"], task.id)
+            history = f"/api/v1/projects/{self.pid}/messages?conversation_id={self.cid}"
+            submission, = (await client.get(f"{history}&limit=1")).json()
+            self.assertEqual(submission["role"], "system")
+            self.assertEqual(submission["task_id"], task.id)
+            self.assertEqual(submission["agent_run_id"], rid)
+            self.assertEqual(submission["agent_call_id"], invoke["id"])
+            self.assertEqual(submission["agent_activity"], {"total": len(activity["items"]), "failed": 1})
+            goal, = (await client.get(f"{history}&limit=1&before={submission['id']}")).json()
+            self.assertEqual(goal["role"], "user")
+            self.assertEqual(goal["agent_run_id"], rid)
+            self.assertEqual(goal["agent_activity"], submission["agent_activity"])
+            self.assertNotIn("agent_call_id", goal)
+            async with self.db.transaction() as session:
+                session.add(
+                    Message(
+                        project_id=self.pid, conversation_id=self.cid, task_id=task.id,
+                        role="assistant", content="这里是创作结果。",
+                    )
+                )
+            reply = (await client.get(history)).json()[-1]
+            self.assertEqual(reply["role"], "assistant")
+            self.assertEqual(reply["agent_run_id"], rid)
+            self.assertNotIn("agent_call_id", reply)
             filtered = (await client.get(f"/api/v1/tasks?project_id={self.pid}&agent_run_id={rid}")).json()
             self.assertEqual([row["id"] for row in filtered], [task.id])
             empty = (await client.get(f"/api/v1/tasks?project_id={self.pid}&agent_run_id={uid()}")).json()
