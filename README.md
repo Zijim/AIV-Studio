@@ -1,38 +1,76 @@
 # 映作 · AIV Studio
 
-面向本机 ComfyUI 的个人创作工作台。项目与素材保存在本机，DeepSeek 根据创作目标和素材用途自动选择生成方式，整项任务确认一次后执行；必要的内部步骤自动续接，完成后等待反馈。
+映作是面向本机 ComfyUI 的 Windows 图像与视频创作工作台。用对话打磨一张图或一个镜头，也能把整条短片交给 Agent 制作。参考素材、生成结果和任务记录按项目保存在本机，方便接着改、找回生成参数，或在新项目里复用。
+
+- **辅助创作**适合逐步打磨。描述想生成或修改的内容，可附上参考素材。查看和修改方案后，再确认执行。
+- **自主创作**适合直接交代交付目标。Agent 可规划分镜、用已接入的 ComfyUI 工作流生成镜头，并合成短片。
+
+[快速启动](#启动) · [生成第一张图](#生成第一张图) · [工作流列表](#已接入的工作流)
+
+![映作工作台的项目素材库、画布和创作助手](docs/workbench.png)
+
+画布中的咖啡壶由「快速文生图」生成，右侧是以它作为参考的短片指令草稿。
+
+## 自主创作示例
+
+在项目素材库选中一张咖啡壶参考图。你可以导入自己的图，也可以用[入门示例](#生成第一张图)生成一张。在助手顶部切到「自主创作」，发送你的成片要求。
+
+> 用选中的咖啡壶图片做一条约 12 秒的短片。三个镜头依次展示窗边全景、壶身特写和咖啡倒入杯中。让咖啡壶的颜色和造型保持一致，完成后把镜头合成一条视频。
+
+对话里可以查看创作计划、工具调用和交付结果，素材库保留入选镜头与成片。跑这个示例需要配置 DeepSeek API Key，并准备可用的 ComfyUI 视频工作流及对应模型和节点。
 
 ## 启动
 
-需要 Windows、Python 3.12、Node.js 24 和已运行的 ComfyUI 0.31.0 或更新版本。默认 ComfyUI 地址为 `http://127.0.0.1:8188`。安装过程中不改变 ComfyUI 环境。
+在 Windows 上准备 Git、Python 3.12 和 Node.js 24，先启动 ComfyUI 0.31.0 或更新版本。映作默认连接 `http://127.0.0.1:8188`。在 PowerShell 中运行以下命令。
 
 ```powershell
-cd D:\Project\AIV_Agent2
-powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
-powershell -ExecutionPolicy Bypass -File scripts/start.ps1
+git clone https://github.com/Zijim/AIV-Studio.git
+cd AIV-Studio
+powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\start.ps1
 ```
 
-打开 `http://127.0.0.1:8765`。已安装依赖后，只需运行 `start.ps1`，保留这个终端运行服务。按 Ctrl+C 可以安全关闭，也可以在另一个终端停止应用：
+在浏览器打开 `http://127.0.0.1:8765`。使用对话时，DeepSeek 负责理解需求、读图和规划，ComfyUI 负责本机生成。请在「设置」保存 **DeepSeek 官方 API Key**。只用底部的手动创作工具时可以跳过密钥配置。
+
+安装完成后，再次启动只需运行 `start.ps1`，保留这个终端运行服务。按 Ctrl+C 可以安全关闭，也可以在另一个终端停止应用。
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/stop.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\stop.ps1
 ```
 
 默认数据目录是 `%LOCALAPPDATA%\AIVAgent\data`。可复制 `config.example.toml` 为 `config.toml` 自定义路径、端口和连接地址；不要将密钥写入配置文件。设置页内的预算与资源参数存入数据库并立即生效。切换目录时先关闭服务，保留旧目录。
 
-也可以创建桌面快捷方式：
+也可以在仓库目录创建桌面快捷方式。
 
 ```powershell
-.\scripts\create_desktop_shortcut.ps1 -DataDirectory D:\Project\AIV_Agent2\.data\dev
+.\scripts\create_desktop_shortcut.ps1
 ```
 
-上述命令沿用本机当前项目/素材目录；不带参数则使用配置的默认目录。先启动ComfyUI，再双击桌面“映作工作台”：服务在后台启动，就绪后自动用系统默认浏览器打开；重复双击会复用正在运行的服务。关闭网页不会停止后台服务，停止时给 `stop.ps1` 传入相同数据目录。启动日志保存在数据目录的 `logs` 中。
+快捷方式使用配置的数据目录。需要使用指定目录时，可在创建快捷方式和调用 `stop.ps1` 时传入相同的 `-DataDirectory`。先启动 ComfyUI，再双击桌面「映作工作台」。服务就绪后会自动打开浏览器，关闭网页后服务仍在后台运行。启动日志保存在数据目录的 `logs` 中。
+
+## 生成第一张图
+
+底部的「快速文生图」使用 Z-Image Turbo。下载以下三个模型并放进对应目录。[ComfyUI 官方下载说明](https://docs.comfy.org/zh/tutorials/image/z-image/z-image-turbo)
+
+| 模型文件 | 放在 `ComfyUI` 下的目录 |
+| --- | --- |
+| `z_image_turbo_bf16.safetensors` | `models/diffusion_models/` |
+| `qwen_3_4b.safetensors` | `models/text_encoders/` |
+| `ae.safetensors` | `models/vae/` |
+
+这个工作流使用 `UNETLoader`、`CLIPLoader`、`KSampler` 等 ComfyUI 自带节点。完整的节点和模型清单见[工具定义](tool_registry/image.generate.zimage/1.0.0/manifest.json)。
+
+1. 启动 ComfyUI 和映作，在左上角新建一个项目。
+2. 在画布底部点「快速文生图」，输入「一只橙色搪瓷咖啡壶放在木窗台上，窗外细雨，柔和的清晨光线，静物摄影」。宽高各填 768，候选数量选 1 张。
+3. 保存方案，在助手中点击「确认生成」。完成后，从「任务队列」查看产物，或在项目素材库中打开它。
 
 ## 使用
 
+### 辅助创作
+
 1. 先在左上角“创作项目”选择本次使用的项目；点击旁边的“+”可新建项目，下方可设置创作目标和风格。
 2. 导入文件、整个文件夹，或通过素材栏“导入ComfyUI既有产物”入口选择本机output目录内文件；Ctrl / Shift 点击可选择多份素材。每批文件显示独立导入结果。
-3. 在设置中保存 **DeepSeek 官方 API Key**，默认模型 ID 是 `deepseek-flash`，对应 DeepSeek V4.1 Flash。也可在启动服务前设置 `DEEPSEEK_API_KEY`。环境变量优先于 Windows 凭据管理器。
+3. 配置好 DeepSeek 官方 API Key 后即可发起对话。默认模型 ID 是 `deepseek-flash`，对应 DeepSeek V4.1 Flash。也可在启动服务前设置 `DEEPSEEK_API_KEY`，它优先于 Windows 凭据管理器中的密钥。
 4. 选择图片并直接描述目标，助手默认自动判断素材用途；需要明确限定时可设置主体、风格、环境、构图参考或首尾帧。也可以直接粘贴当前项目图片的本工作台预览/原图链接，后台会自动附图。每轮最多6张，本轮选中或链接引用的图片会生成读图副本并发送至 DeepSeek；其他素材只提供文字信息。回复下方可展开“模型图片观察”，查看各图观察和不确定之处。
 5. 输入框默认自动选择生成方式，“高级设置”中可明确限定工具；助手先判断意图和工具，再按对应指引准备方案。检查选择理由、保持项、必要补充、输入缩略图和实际视频时长；展开“完整提示词与参数”查看分节正文、复制执行提示词并核对参数。确认后点击“确认生成”。
 6. 结果自动归档；打开素材详情填写备注、标记最佳候选、查看来源关系。通过跨项目素材库复用已有素材。
@@ -75,6 +113,8 @@ ComfyUI 中已有外部任务时，本应用等待其队列清空。候选串行
 | 参考生成视频 | MiniMax_H3_Ref2VA.json | Ref2VA 权重，1–9张人物/风格/环境/构图参考图 |
 | 首尾帧生成视频 | video_minimax_h3_i2v.json 的关键帧节点 | FL2VA 权重，开场与结束双锚点 |
 | 尾帧生成视频 | video_minimax_h3_i2v.json 的关键帧节点 | FL2VA 权重，只约束结束画面 |
+
+自主创作还可调用内置的抽帧和视频合成工具，提取可复用的画面，或按分镜顺序拼接已生成的镜头。
 
 应用使用 `tool_registry` 中固定版本的 API 模板，不会修改原始工作流。`scripts/prepare_tools.py` 是开发时的导入工具，运行应用不需要 comfy-cli。
 
@@ -119,6 +159,6 @@ Vite 端口5173代理 `/api` 到后端。生产界面使用 `npm.cmd run build` 
 
 主体参考通过 Ref2VA 的参考条件输入，关键帧通过 FL2VA 的首尾帧条件输入，两个权重不能混用。当前 Ref2VA 执行入口仅支持参考图片，不接入视频、音频参考或视频编辑；视频均为24fps并按17k+5帧对齐。应用尚未自动读取连续帧或验收生成质量，结构校验和工作流预检不代表成片质量保证。
 
-完整的模型联网闭环需要有效 DeepSeek 密钥。正式测试用例按此前约定后续补充，当前验证记录见 `DEVELOPMENT.md`。
+详细的开发验证见 [DEVELOPMENT.md](DEVELOPMENT.md) 和[自主创作实现与验证](docs/creative-agent-implementation.md)。
 
-工具选择与专用提示词生成按 [AGENT_OPTIMIZATION_SPEC.md](AGENT_OPTIMIZATION_SPEC.md) 的 v2 补充规格接入。十个工具各有固定版本的写作指引，五种视频模式分别绑定用户提供的 FL2VA/Ref2VA 资料适配版。默认固定单镜头、自然声音、无配乐，用户明确要求优先。`prompt_guides/` 按工具版本和模式绑定并校验 hash，方案及执行记录保存实际使用的指引来源。旧工具模板和历史指引快照不原地修改。
+辅助创作的工具选择与专用提示词生成按 [AGENT_OPTIMIZATION_SPEC.md](AGENT_OPTIMIZATION_SPEC.md) 的 v2 补充规格接入。工具各有固定版本的写作指引，五种视频模式分别绑定用户提供的 FL2VA/Ref2VA 资料适配版。默认固定单镜头、自然声音、无配乐，用户明确要求优先。`prompt_guides/` 按工具版本和模式绑定并校验 hash，方案及执行记录保存实际使用的指引来源。旧工具模板和历史指引快照不原地修改。
